@@ -1,4 +1,5 @@
 #include "Trackball.h"
+#include <driver/gpio.h>
 
 volatile int8_t Trackball::_deltaX = 0;
 volatile int8_t Trackball::_deltaY = 0;
@@ -8,12 +9,29 @@ Trackball* Trackball::_instance = nullptr;
 bool Trackball::begin() {
     _instance = this;
 
+    // Detach any stale interrupts (GPIO state may persist after USB download mode reset)
+    detachInterrupt(digitalPinToInterrupt(TBALL_UP));
+    detachInterrupt(digitalPinToInterrupt(TBALL_DOWN));
+    detachInterrupt(digitalPinToInterrupt(TBALL_LEFT));
+    detachInterrupt(digitalPinToInterrupt(TBALL_RIGHT));
+    detachInterrupt(digitalPinToInterrupt(TBALL_CLICK));
+
+    // Reset pins to a known state before configuring
+    gpio_reset_pin((gpio_num_t)TBALL_UP);
+    gpio_reset_pin((gpio_num_t)TBALL_DOWN);
+    gpio_reset_pin((gpio_num_t)TBALL_LEFT);
+    gpio_reset_pin((gpio_num_t)TBALL_RIGHT);
+    gpio_reset_pin((gpio_num_t)TBALL_CLICK);
+
     // Configure trackball GPIOs as inputs with pullup
     pinMode(TBALL_UP, INPUT_PULLUP);
     pinMode(TBALL_DOWN, INPUT_PULLUP);
     pinMode(TBALL_LEFT, INPUT_PULLUP);
     pinMode(TBALL_RIGHT, INPUT_PULLUP);
     pinMode(TBALL_CLICK, INPUT_PULLUP);
+
+    // Small delay to let pullups stabilize
+    delay(5);
 
     // Attach interrupts for movement detection
     attachInterrupt(digitalPinToInterrupt(TBALL_UP), isrUp, FALLING);
@@ -22,7 +40,7 @@ bool Trackball::begin() {
     attachInterrupt(digitalPinToInterrupt(TBALL_RIGHT), isrDown, FALLING);   // Physical right pin = downward
     attachInterrupt(digitalPinToInterrupt(TBALL_CLICK), isrClick, FALLING);
 
-    Serial.println("[TRACKBALL] Initialized");
+    Serial.println("[TRACKBALL] Initialized (GPIO reset + interrupts attached)");
     return true;
 }
 

@@ -123,6 +123,75 @@ void WiFiInterface::loop() {
     readClients();
 }
 
+std::vector<WiFiInterface::ScanResult> WiFiInterface::scanNetworks(int maxResults) {
+    std::vector<ScanResult> results;
+    wifi_mode_t prevMode = WiFi.getMode();
+    bool wasConnected = (WiFi.status() == WL_CONNECTED);
+    String prevSSID, prevPass;
+
+    Serial.printf("[WIFI] Scan: prevMode=%d connected=%d\n", (int)prevMode, wasConnected);
+
+    // Ensure we're in a mode that supports scanning
+    if (prevMode == WIFI_OFF || prevMode == WIFI_AP) {
+        WiFi.mode(WIFI_AP_STA);
+    }
+    // Disconnect from any active STA connection to free the radio for scanning
+    WiFi.disconnect(false);
+    delay(300);
+
+    // Delete any previous scan results
+    WiFi.scanDelete();
+
+    Serial.println("[WIFI] Starting network scan...");
+
+    // Synchronous scan — blocks until complete (typically 2-5 seconds)
+    int n = WiFi.scanNetworks(false, false, false, 300, 0);
+
+    Serial.printf("[WIFI] Scan result: %d\n", n);
+
+    // If synchronous returned -2 (still running), poll for it
+    if (n == WIFI_SCAN_RUNNING) {
+        unsigned long t0 = millis();
+        while (n == WIFI_SCAN_RUNNING && millis() - t0 < 15000) {
+            delay(200);
+            n = WiFi.scanComplete();
+        }
+        Serial.printf("[WIFI] Scan poll result: %d\n", n);
+    }
+
+    if (n > 0) {
+        for (int i = 0; i < n; i++) {
+            String ssid = WiFi.SSID(i);
+            if (ssid.isEmpty()) continue;
+            int rssi = WiFi.RSSI(i);
+            bool enc = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+            bool found = false;
+            for (auto& r : results) {
+                if (r.ssid == ssid) {
+                    if (rssi > r.rssi) r.rssi = rssi;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) results.push_back({ssid, rssi, enc});
+        }
+        WiFi.scanDelete();
+        std::sort(results.begin(), results.end(),
+                  [](const ScanResult& a, const ScanResult& b) { return a.rssi > b.rssi; });
+        if ((int)results.size() > maxResults) results.resize(maxResults);
+    }
+
+    // Restore previous WiFi mode
+    if (prevMode == WIFI_OFF) {
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+    } else if (prevMode == WIFI_AP) {
+        WiFi.mode(WIFI_AP);
+    }
+    // Note: if was STA/AP_STA, the reconnect will happen via main loop's STA handler
+    return results;
+}
+
 // HDLC-like framing: [0x7E] [escaped data] [0x7E]
 void WiFiInterface::sendFrame(WiFiClient& client, const uint8_t* data, size_t len) {
     client.write(FRAME_START);

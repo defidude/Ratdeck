@@ -23,6 +23,7 @@ struct UserSettings {
     uint32_t loraBW = LORA_DEFAULT_BW;
     uint8_t loraCR = LORA_DEFAULT_CR;
     int8_t loraTxPower = LORA_DEFAULT_TX_POWER;
+    long loraPreamble = LORA_DEFAULT_PREAMBLE;
 
     // WiFi
     RatWiFiMode wifiMode = RAT_WIFI_AP;

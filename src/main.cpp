@@ -448,16 +448,6 @@ void setup() {
     bootScreen.setProgress(0.83f, "Config loaded");
     bootRender();
 
-    // Force radio to BoardConfig defaults (override stale saved config)
-    {
-        auto& s = userConfig.settings();
-        s.loraFrequency = LORA_DEFAULT_FREQ;
-        s.loraSF        = LORA_DEFAULT_SF;
-        s.loraBW        = LORA_DEFAULT_BW;
-        s.loraCR        = LORA_DEFAULT_CR;
-        s.loraTxPower   = LORA_DEFAULT_TX_POWER;
-    }
-
     // Step 21: Apply radio config
     if (radioOnline) {
         auto& s = userConfig.settings();
@@ -466,10 +456,11 @@ void setup() {
         radio.setSignalBandwidth(s.loraBW);
         radio.setCodingRate4(s.loraCR);
         radio.setTxPower(s.loraTxPower);
+        radio.setPreambleLength(s.loraPreamble);
         radio.receive();
-        Serial.printf("[BOOT] Radio: %lu Hz, SF%d, BW%lu, CR4/%d, %d dBm\n",
+        Serial.printf("[BOOT] Radio: %lu Hz, SF%d, BW%lu, CR4/%d, %d dBm, pre=%ld\n",
                       (unsigned long)s.loraFrequency, s.loraSF,
-                      (unsigned long)s.loraBW, s.loraCR, s.loraTxPower);
+                      (unsigned long)s.loraBW, s.loraCR, s.loraTxPower, s.loraPreamble);
     }
     bootScreen.setProgress(0.84f, "Radio configured");
     bootRender();

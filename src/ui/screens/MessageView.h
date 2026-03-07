@@ -1,8 +1,10 @@
 #pragma once
 
 #include "ui/UIManager.h"
+#include "reticulum/LXMFMessage.h"
 #include <functional>
 #include <string>
+#include <vector>
 
 class LXMFManager;
 class AnnounceManager;
@@ -26,6 +28,7 @@ public:
 
 private:
     void sendCurrentMessage();
+    void refreshMessages();
 
     LXMFManager* _lxmf = nullptr;
     AnnounceManager* _am = nullptr;
@@ -34,4 +37,7 @@ private:
     std::string _inputText;
     int _lastMsgCount = -1;
     int _scrollOffset = 0;  // scroll from bottom
+    std::vector<LXMFMessage> _cachedMsgs;
+    unsigned long _lastRefreshMs = 0;
+    static constexpr unsigned long REFRESH_INTERVAL_MS = 500;
 };

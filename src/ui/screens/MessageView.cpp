@@ -9,19 +9,32 @@ void MessageView::onEnter() {
     if (_lxmf) _lxmf->markRead(_peerHex);
     _lastMsgCount = -1;
     _scrollOffset = 0;
+    _lastRefreshMs = 0;
+    refreshMessages();
     markDirty();
 }
 
 void MessageView::onExit() {
     _inputText.clear();
+    _cachedMsgs.clear();
+}
+
+void MessageView::refreshMessages() {
+    if (!_lxmf) return;
+    _cachedMsgs = _lxmf->getMessages(_peerHex);
+    _lastRefreshMs = millis();
 }
 
 void MessageView::update() {
     if (!_lxmf) return;
-    auto msgs = _lxmf->getMessages(_peerHex);
-    if ((int)msgs.size() != _lastMsgCount) {
-        _lastMsgCount = (int)msgs.size();
-        markDirty();
+    unsigned long now = millis();
+    if (now - _lastRefreshMs >= REFRESH_INTERVAL_MS) {
+        int oldCount = (int)_cachedMsgs.size();
+        refreshMessages();
+        if ((int)_cachedMsgs.size() != oldCount) {
+            _lastMsgCount = (int)_cachedMsgs.size();
+            markDirty();
+        }
     }
 }
 
@@ -79,7 +92,7 @@ void MessageView::draw(LGFX_TDeck& gfx) {
 
     // Message area
     if (!_lxmf) return;
-    auto msgs = _lxmf->getMessages(_peerHex);
+    const auto& msgs = _cachedMsgs;
     int msgAreaTop = headerBottom + 2;
     int msgAreaBottom = inputY - 4;
     int lineH = 12;

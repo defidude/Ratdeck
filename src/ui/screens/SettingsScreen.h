@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/UIManager.h"
+#include "transport/WiFiInterface.h"
 #include <string>
 #include <vector>
 #include <functional>
@@ -16,13 +17,18 @@ class TCPClientInterface;
 class ReticulumManager;
 
 enum class SettingType : uint8_t {
-    HEADER,
     READONLY,
     INTEGER,
     TOGGLE,
     ENUM_CHOICE,
-    ACTION,      // Button — triggers callback on Enter
-    TEXT_INPUT    // Editable text field
+    ACTION,
+    TEXT_INPUT
+};
+
+enum class SettingsView : uint8_t {
+    CATEGORY_LIST,
+    ITEM_LIST,
+    WIFI_PICKER
 };
 
 struct SettingItem {
@@ -34,19 +40,24 @@ struct SettingItem {
     int minVal = 0;
     int maxVal = 1;
     int step = 1;
-    // For ENUM_CHOICE: list of option labels
     std::vector<const char*> enumLabels;
-    // For ACTION: callback on Enter
     std::function<void()> action;
-    // For TEXT_INPUT: string getter/setter
     std::function<String()> textGetter;
     std::function<void(const String&)> textSetter;
     int maxTextLen = 16;
 };
 
+struct SettingsCategory {
+    const char* name;
+    int startIdx;
+    int count;
+    std::function<String()> summary;
+};
+
 class SettingsScreen : public Screen {
 public:
     void onEnter() override;
+    void update() override;
     bool handleKey(const KeyEvent& event) override;
 
     void setUserConfig(UserConfig* cfg) { _cfg = cfg; }
@@ -70,6 +81,17 @@ private:
     void applyAndSave();
     void applyPreset(int presetIdx);
     int detectPreset() const;
+
+    void drawCategoryList(LGFX_TDeck& gfx);
+    void drawItemList(LGFX_TDeck& gfx);
+    void drawWifiPicker(LGFX_TDeck& gfx);
+
+    bool handleCategoryKeys(const KeyEvent& event);
+    bool handleItemKeys(const KeyEvent& event);
+    bool handleWifiPickerKeys(const KeyEvent& event);
+
+    void enterCategory(int catIdx);
+    void exitToCategories();
     void skipToNextEditable(int dir);
     bool isEditable(int idx) const;
 
@@ -87,12 +109,31 @@ private:
 
     std::function<bool()> _saveCallback;
 
+    // View state
+    SettingsView _view = SettingsView::CATEGORY_LIST;
+
+    // Categories
+    std::vector<SettingsCategory> _categories;
+    int _categoryIdx = 0;
+    int _categoryScroll = 0;
+
+    // Items (within current category)
     std::vector<SettingItem> _items;
     int _selectedIdx = 0;
-    int _scrollOffset = 0;
+    int _itemScroll = 0;
+    int _catRangeStart = 0;
+    int _catRangeEnd = 0;
+
+    // Edit state
     bool _editing = false;
     int _editValue = 0;
-    // For TEXT_INPUT editing
     bool _textEditing = false;
     String _editText;
+    bool _confirmingReset = false;
+
+    // WiFi picker
+    std::vector<WiFiInterface::ScanResult> _wifiResults;
+    int _wifiPickerIdx = 0;
+    int _wifiPickerScroll = 0;
+    bool _wifiScanning = false;
 };

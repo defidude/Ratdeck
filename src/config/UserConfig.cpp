@@ -16,6 +16,7 @@ bool UserConfig::parseJson(const String& json) {
     _settings.loraBW        = doc["lora_bw"]   | (long)LORA_DEFAULT_BW;
     _settings.loraCR        = doc["lora_cr"]   | (int)LORA_DEFAULT_CR;
     _settings.loraTxPower   = doc["lora_txp"]  | (int)LORA_DEFAULT_TX_POWER;
+    _settings.loraPreamble  = doc["lora_pre"]  | (long)LORA_DEFAULT_PREAMBLE;
 
     // WiFi mode — migrate from legacy wifi_enabled bool
     int mode = doc["wifi_mode"] | -1;
@@ -68,6 +69,7 @@ String UserConfig::serializeToJson() const {
     doc["lora_bw"]   = _settings.loraBW;
     doc["lora_cr"]   = _settings.loraCR;
     doc["lora_txp"]  = _settings.loraTxPower;
+    doc["lora_pre"]  = _settings.loraPreamble;
 
     doc["wifi_mode"] = (int)_settings.wifiMode;
     doc["wifi_ap_ssid"] = _settings.wifiAPSSID;

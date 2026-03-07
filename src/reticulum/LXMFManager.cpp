@@ -2,6 +2,7 @@
 #include "LXMFManager.h"
 #include "config/Config.h"
 #include <Transport.h>
+#include <time.h>
 
 LXMFManager* LXMFManager::_instance = nullptr;
 
@@ -29,7 +30,13 @@ bool LXMFManager::sendMessage(const RNS::Bytes& destHash, const std::string& con
     LXMFMessage msg;
     msg.sourceHash = _rns->destination().hash();
     msg.destHash = destHash;
-    msg.timestamp = millis() / 1000.0;
+    // Use real epoch time when NTP is synced, uptime fallback otherwise
+    time_t now = time(nullptr);
+    if (now > 1700000000) {
+        msg.timestamp = (double)now;
+    } else {
+        msg.timestamp = millis() / 1000.0;
+    }
     msg.content = content;
     msg.title = title;
     msg.incoming = false;

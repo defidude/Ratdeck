@@ -3,6 +3,12 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 
+// Helper: check if filename ends with ".json"
+static bool isJsonFile(const char* name) {
+    size_t len = strlen(name);
+    return len > 5 && strcmp(name + len - 5, ".json") == 0;
+}
+
 bool MessageStore::begin(FlashStore* flash, SDStore* sd) {
     _flash = flash;
     _sd = sd;
@@ -35,7 +41,7 @@ void MessageStore::migrateFlashToSD() {
 
             File entry = peerDir.openNextFile();
             while (entry) {
-                if (!entry.isDirectory()) {
+                if (!entry.isDirectory() && isJsonFile(entry.name())) {
                     String sdPath = sdDir + "/" + entry.name();
                     if (!_sd->exists(sdPath.c_str())) {
                         size_t size = entry.size();
@@ -107,14 +113,25 @@ bool MessageStore::saveMessage(const LXMFMessage& msg) {
     doc["incoming"] = msg.incoming;
     doc["status"] = (int)msg.status;
     doc["read"] = msg.incoming ? msg.read : true;
+    if (msg.messageId.size() > 0) {
+        doc["msgid"] = msg.messageId.toHex();
+    }
 
     String json;
     serializeJson(doc, json);
 
+    // Use messageId hash prefix in filename for dedup (same message = same file)
     char filename[64];
-    snprintf(filename, sizeof(filename), "%lu_%c.json",
-             (unsigned long)(msg.timestamp * 1000),
-             msg.incoming ? 'i' : 'o');
+    if (msg.messageId.size() > 0) {
+        std::string idHex = msg.messageId.toHex();
+        snprintf(filename, sizeof(filename), "%s_%c.json",
+                 idHex.substr(0, 16).c_str(),
+                 msg.incoming ? 'i' : 'o');
+    } else {
+        snprintf(filename, sizeof(filename), "%lu_%c.json",
+                 (unsigned long)(msg.timestamp * 1000),
+                 msg.incoming ? 'i' : 'o');
+    }
 
     bool sdOk = false;
     bool flashOk = false;
@@ -149,7 +166,7 @@ std::vector<LXMFMessage> MessageStore::loadConversation(const std::string& peerH
     auto loadFromDir = [&](File& d) {
         File entry = d.openNextFile();
         while (entry) {
-            if (!entry.isDirectory()) {
+            if (!entry.isDirectory() && isJsonFile(entry.name())) {
                 size_t size = entry.size();
                 if (size > 0 && size < 4096) {
                     String json = entry.readString();
@@ -214,7 +231,7 @@ int MessageStore::messageCount(const std::string& peerHex) const {
             int count = 0;
             File entry = d.openNextFile();
             while (entry) {
-                if (!entry.isDirectory()) count++;
+                if (!entry.isDirectory() && isJsonFile(entry.name())) count++;
                 entry = d.openNextFile();
             }
             return count;
@@ -226,7 +243,7 @@ int MessageStore::messageCount(const std::string& peerHex) const {
     int count = 0;
     File entry = d.openNextFile();
     while (entry) {
-        if (!entry.isDirectory()) count++;
+        if (!entry.isDirectory() && isJsonFile(entry.name())) count++;
         entry = d.openNextFile();
     }
     return count;
@@ -273,7 +290,7 @@ void MessageStore::markConversationRead(const std::string& peerHex) {
         if (!d || !d.isDirectory()) return;
         File entry = d.openNextFile();
         while (entry) {
-            if (!entry.isDirectory()) {
+            if (!entry.isDirectory() && isJsonFile(entry.name())) {
                 size_t size = entry.size();
                 if (size > 0 && size < 4096) {
                     String json = entry.readString();
@@ -326,7 +343,13 @@ void MessageStore::enforceFlashLimit(const std::string& peerHex) {
     File entry = d.openNextFile();
     while (entry) {
         if (!entry.isDirectory()) {
-            files.push_back(String(dir) + "/" + entry.name());
+            if (isJsonFile(entry.name())) {
+                files.push_back(String(dir) + "/" + entry.name());
+            } else {
+                // Clean up stale .bak/.tmp files
+                String junk = String(dir) + "/" + entry.name();
+                LittleFS.remove(junk);
+            }
         }
         entry = d.openNextFile();
     }
@@ -348,7 +371,13 @@ void MessageStore::enforceSDLimit(const std::string& peerHex) {
     File entry = d.openNextFile();
     while (entry) {
         if (!entry.isDirectory()) {
-            files.push_back(dir + "/" + entry.name());
+            if (isJsonFile(entry.name())) {
+                files.push_back(dir + "/" + entry.name());
+            } else {
+                // Clean up stale .bak/.tmp files
+                String junk = dir + "/" + entry.name();
+                _sd->remove(junk.c_str());
+            }
         }
         entry = d.openNextFile();
     }

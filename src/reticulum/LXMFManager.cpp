@@ -135,25 +135,65 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
     Serial.printf("[DIAG] LXMF: outDest=%s msgDest=%s match=%s\n",
         outDest.hash().toHex().c_str(), msg.destHash.toHex().c_str(),
         (outDest.hash() == msg.destHash) ? "YES" : "NO");
+
+    // packFull returns opportunistic format: [src:16][sig:64][msgpack]
     std::vector<uint8_t> payload = msg.packFull(_rns->identity());
     if (payload.empty()) { Serial.println("[LXMF] packFull returned empty!"); msg.status = LXMFStatus::FAILED; return true; }
-    RNS::Bytes payloadBytes(payload.data(), payload.size());
-    if (payloadBytes.size() > RNS::Type::Reticulum::MDU) {
-        Serial.printf("[LXMF] payload too large: %d > MDU\n", (int)payloadBytes.size());
-        msg.status = LXMFStatus::FAILED; return true;
-    }
+
     msg.status = LXMFStatus::SENDING;
-    Serial.printf("[LXMF] sending packet: %d bytes to %s\n", (int)payloadBytes.size(), outDest.hash().toHex().substr(0, 12).c_str());
-    RNS::Packet packet(outDest, payloadBytes);
-    RNS::PacketReceipt receipt = packet.send();
-    if (receipt) {
+    bool sent = false;
+
+    // Try link-based delivery if we have an active link to this peer
+    if (_outLink && _outLinkDestHash == msg.destHash
+        && _outLink.status() == RNS::Type::Link::ACTIVE) {
+        // Link delivery: prepend dest_hash (Python DIRECT format)
+        std::vector<uint8_t> linkPayload;
+        linkPayload.reserve(16 + payload.size());
+        linkPayload.insert(linkPayload.end(), msg.destHash.data(), msg.destHash.data() + 16);
+        linkPayload.insert(linkPayload.end(), payload.begin(), payload.end());
+        RNS::Bytes linkBytes(linkPayload.data(), linkPayload.size());
+        if (linkBytes.size() <= RNS::Type::Reticulum::MDU) {
+            Serial.printf("[LXMF] sending via link: %d bytes to %s\n",
+                          (int)linkBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
+            RNS::Packet packet(_outLink, linkBytes);
+            RNS::PacketReceipt receipt = packet.send();
+            if (receipt) { sent = true; }
+        }
+    }
+
+    // Fallback: opportunistic delivery (always available, no delay)
+    if (!sent) {
+        RNS::Bytes payloadBytes(payload.data(), payload.size());
+        if (payloadBytes.size() > RNS::Type::Reticulum::MDU) {
+            Serial.printf("[LXMF] payload too large: %d > MDU\n", (int)payloadBytes.size());
+            msg.status = LXMFStatus::FAILED; return true;
+        }
+        Serial.printf("[LXMF] sending opportunistic: %d bytes to %s\n",
+                      (int)payloadBytes.size(), outDest.hash().toHex().substr(0, 12).c_str());
+        RNS::Packet packet(outDest, payloadBytes);
+        RNS::PacketReceipt receipt = packet.send();
+        if (receipt) { sent = true; }
+    }
+
+    if (sent) {
         msg.status = LXMFStatus::SENT;
         // messageId already computed by packFull() matching Python's LXMessage.pack()
-        Serial.printf("[LXMF] SENT OK: %d bytes, msgId=%s\n", (int)payloadBytes.size(), msg.messageId.toHex().substr(0, 8).c_str());
+        Serial.printf("[LXMF] SENT OK: msgId=%s\n", msg.messageId.toHex().substr(0, 8).c_str());
     } else {
         Serial.println("[LXMF] send FAILED: no receipt");
         msg.status = LXMFStatus::FAILED;
     }
+
+    // Background: establish link for future messages to this peer
+    if (!_outLinkPending && (!_outLink || _outLinkDestHash != msg.destHash
+        || _outLink.status() == RNS::Type::Link::CLOSED)) {
+        _outLinkDestHash = msg.destHash;
+        _outLinkPending = true;
+        Serial.printf("[LXMF] Establishing link to %s for future messages\n",
+                      msg.destHash.toHex().substr(0, 8).c_str());
+        RNS::Link newLink(outDest, onOutLinkEstablished, onOutLinkClosed);
+    }
+
     return true;
 }
 
@@ -167,6 +207,21 @@ void LXMFManager::onPacketReceived(const RNS::Bytes& data, const RNS::Packet& pa
     fullData.insert(fullData.end(), destHash.data(), destHash.data() + destHash.size());
     fullData.insert(fullData.end(), data.data(), data.data() + data.size());
     _instance->processIncoming(fullData.data(), fullData.size(), destHash);
+}
+
+void LXMFManager::onOutLinkEstablished(RNS::Link& link) {
+    if (!_instance) return;
+    _instance->_outLink = link;
+    _instance->_outLinkPending = false;
+    Serial.printf("[LXMF] Outbound link established to %s\n",
+                  _instance->_outLinkDestHash.toHex().substr(0, 8).c_str());
+}
+
+void LXMFManager::onOutLinkClosed(RNS::Link& link) {
+    if (!_instance) return;
+    _instance->_outLink = {RNS::Type::NONE};
+    _instance->_outLinkPending = false;
+    Serial.println("[LXMF] Outbound link closed");
 }
 
 void LXMFManager::onLinkEstablished(RNS::Link& link) {

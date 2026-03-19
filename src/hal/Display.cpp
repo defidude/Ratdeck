@@ -11,7 +11,8 @@ static void lvgl_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t*
     uint32_t h = area->y2 - area->y1 + 1;
     s_gfx->startWrite();
     s_gfx->setAddrWindow(area->x1, area->y1, w, h);
-    s_gfx->pushPixelsDMA((lgfx::swap565_t*)&color_p->full, w * h);
+    // Blocking pushPixels prevents SPI bus contention with SX1262 radio on shared FSPI bus
+    s_gfx->pushPixels((lgfx::swap565_t*)&color_p->full, w * h);
     s_gfx->endWrite();
     lv_disp_flush_ready(drv);
 }

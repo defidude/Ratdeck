@@ -152,22 +152,12 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
         linkPayload.insert(linkPayload.end(), msg.destHash.data(), msg.destHash.data() + 16);
         linkPayload.insert(linkPayload.end(), payload.begin(), payload.end());
         RNS::Bytes linkBytes(linkPayload.data(), linkPayload.size());
-        // Token encryption adds ~48 bytes (IV:16 + HMAC:32 + AES padding).
-        // LoRa packets are max 255 bytes (1 header + 19 Reticulum H1 + encrypted).
-        // If the plaintext is too large, Token output exceeds LoRa MTU and
-        // SX1262::write() silently truncates, corrupting the HMAC.
-        // Cap link delivery to 180 bytes to stay safely under the limit.
-        // Larger messages fall through to opportunistic delivery.
-        static constexpr size_t LORA_SAFE_LINK_PAYLOAD = 180;
-        if (linkBytes.size() <= LORA_SAFE_LINK_PAYLOAD) {
+        if (linkBytes.size() <= RNS::Type::Reticulum::MDU) {
             Serial.printf("[LXMF] sending via link: %d bytes to %s\n",
                           (int)linkBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
             RNS::Packet packet(_outLink, linkBytes);
             RNS::PacketReceipt receipt = packet.send();
             if (receipt) { sent = true; }
-        } else {
-            Serial.printf("[LXMF] link payload too large for LoRa (%d > %d), using opportunistic\n",
-                          (int)linkBytes.size(), (int)LORA_SAFE_LINK_PAYLOAD);
         }
     }
 

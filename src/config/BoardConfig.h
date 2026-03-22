@@ -52,7 +52,8 @@
 // --- Touchscreen (GT911 capacitive) ---
 #define TOUCH_INT           16
 // GT911 I2C address: typically 0x5D or 0x14 (depends on INT state at boot)
-#define TOUCH_I2C_ADDR      0x5D
+#define TOUCH_I2C_ADDR_1    0x5D
+#define TOUCH_I2C_ADDR_2    0x14
 
 // --- Trackball ---
 #define TBALL_UP             3

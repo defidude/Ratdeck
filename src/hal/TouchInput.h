@@ -18,6 +18,8 @@ public:
 private:
     bool readGT911();
 
+    uint8_t _i2cAddress = 0;
+
     bool _touched = false;
     int16_t _x = 0;
     int16_t _y = 0;

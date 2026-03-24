@@ -153,11 +153,21 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
         linkPayload.insert(linkPayload.end(), payload.begin(), payload.end());
         RNS::Bytes linkBytes(linkPayload.data(), linkPayload.size());
         if (linkBytes.size() <= RNS::Type::Reticulum::MDU) {
-            Serial.printf("[LXMF] sending via link: %d bytes to %s\n",
+            // Small enough for single link packet
+            Serial.printf("[LXMF] sending via link packet: %d bytes to %s\n",
                           (int)linkBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
             RNS::Packet packet(_outLink, linkBytes);
             RNS::PacketReceipt receipt = packet.send();
             if (receipt) { sent = true; }
+        } else {
+            // Too large for single packet — use Resource transfer
+            Serial.printf("[LXMF] sending via link resource: %d bytes to %s\n",
+                          (int)linkBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
+            if (_outLink.start_resource_transfer(linkBytes)) {
+                sent = true;
+            } else {
+                Serial.println("[LXMF] resource transfer failed to start");
+            }
         }
     }
 

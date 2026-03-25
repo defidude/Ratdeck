@@ -105,6 +105,10 @@ void AnnounceManager::received_announce(
 {
     std::string name;
     if (app_data.size() > 0) {
+        Serial.printf("[ANNOUNCE-RX] app_data: %d bytes hex: ", (int)app_data.size());
+        for (size_t i = 0; i < std::min((size_t)16, app_data.size()); i++)
+            Serial.printf("%02X", app_data.data()[i]);
+        Serial.println();
         std::string rawName = extractMsgPackName(app_data.data(), app_data.size());
         if (rawName.empty()) {
             bool isText = app_data.size() > 0 && app_data.size() <= 32;

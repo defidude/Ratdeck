@@ -86,7 +86,22 @@ bool LXMFManager::sendMessage(const RNS::Bytes& destHash, const std::string& con
 }
 
 bool LXMFManager::sendDirect(LXMFMessage& msg) {
-    Serial.printf("[LXMF] sendDirect: dest=%s\n", msg.destHash.toHex().substr(0, 12).c_str());
+    Serial.printf("[LXMF] sendDirect: dest=%s link=%s pending=%s\n",
+        msg.destHash.toHex().substr(0, 12).c_str(),
+        _outLink ? (_outLink.status() == RNS::Type::Link::ACTIVE ? "ACTIVE" : "INACTIVE") : "NONE",
+        _outLinkPending ? "yes" : "no");
+
+    // Reset stale link-pending state: if pending but link never became ACTIVE,
+    // allow a new link attempt. Covers: link object destroyed (NONE), timed out, or failed.
+    if (_outLinkPending) {
+        bool linkReady = _outLink && _outLink.status() == RNS::Type::Link::ACTIVE;
+        if (!linkReady) {
+            _outLinkPending = false;
+            _outLink = {RNS::Type::NONE};
+            Serial.println("[LXMF] Clearing stale link-pending (link not active)");
+        }
+    }
+
     RNS::Identity recipientId = RNS::Identity::recall(msg.destHash);
     if (!recipientId) {
         msg.retries++;
@@ -160,7 +175,7 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
             RNS::PacketReceipt receipt = packet.send();
             if (receipt) { sent = true; }
         } else {
-            // Too large for single packet — use Resource transfer
+            // Too large for single packet — use Resource transfer (chunked)
             Serial.printf("[LXMF] sending via link resource: %d bytes to %s\n",
                           (int)linkBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
             if (_outLink.start_resource_transfer(linkBytes)) {
@@ -171,38 +186,51 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
         }
     }
 
-    // Fallback: opportunistic delivery (always available, no delay)
+    // Fallback: opportunistic or queue for link-based resource transfer
     if (!sent) {
         RNS::Bytes payloadBytes(payload.data(), payload.size());
-        if (payloadBytes.size() > RNS::Type::Reticulum::MDU) {
-            Serial.printf("[LXMF] payload too large: %d > MDU\n", (int)payloadBytes.size());
-            msg.status = LXMFStatus::FAILED; return true;
+        if (payloadBytes.size() <= RNS::Type::Reticulum::MDU) {
+            // Small enough for single opportunistic packet
+            Serial.printf("[LXMF] sending opportunistic: %d bytes to %s\n",
+                          (int)payloadBytes.size(), outDest.hash().toHex().substr(0, 12).c_str());
+            RNS::Packet packet(outDest, payloadBytes);
+            RNS::PacketReceipt receipt = packet.send();
+            if (receipt) { sent = true; }
+        } else {
+            // Too large for opportunistic — need link + resource transfer
+            Serial.printf("[LXMF] Message too large for opportunistic (%d bytes > MDU), needs link (retry %d)\n",
+                          (int)payloadBytes.size(), msg.retries);
+            if (msg.retries % 3 == 0 && (!_outLink || _outLinkDestHash != msg.destHash
+                || _outLink.status() != RNS::Type::Link::ACTIVE)) {
+                _outLinkPendingHash = msg.destHash;
+                _outLinkPending = true;
+                Serial.printf("[LXMF] Establishing link to %s for resource transfer\n",
+                              msg.destHash.toHex().substr(0, 8).c_str());
+                RNS::Link newLink(outDest, onOutLinkEstablished, onOutLinkClosed);
+            }
+            msg.retries++;
+            if (msg.retries >= 30) {
+                Serial.printf("[LXMF] Link for %s not established after %d retries — FAILED\n",
+                              msg.destHash.toHex().substr(0, 8).c_str(), msg.retries);
+                msg.status = LXMFStatus::FAILED;
+                return true;
+            }
+            return false;  // Keep in queue, retry when link is established
         }
-        Serial.printf("[LXMF] sending opportunistic: %d bytes to %s\n",
-                      (int)payloadBytes.size(), outDest.hash().toHex().substr(0, 12).c_str());
-        RNS::Packet packet(outDest, payloadBytes);
-        RNS::PacketReceipt receipt = packet.send();
-        if (receipt) { sent = true; }
     }
 
     if (sent) {
         msg.status = LXMFStatus::SENT;
-        // messageId already computed by packFull() matching Python's LXMessage.pack()
         Serial.printf("[LXMF] SENT OK: msgId=%s\n", msg.messageId.toHex().substr(0, 8).c_str());
     } else {
         Serial.println("[LXMF] send FAILED: no receipt");
         msg.status = LXMFStatus::FAILED;
     }
 
-    // Background: establish link for future messages to this peer
-    if (!_outLinkPending && (!_outLink || _outLinkDestHash != msg.destHash
-        || _outLink.status() == RNS::Type::Link::CLOSED)) {
-        _outLinkPendingHash = msg.destHash;
-        _outLinkPending = true;
-        Serial.printf("[LXMF] Establishing link to %s for future messages\n",
-                      msg.destHash.toHex().substr(0, 8).c_str());
-        RNS::Link newLink(outDest, onOutLinkEstablished, onOutLinkClosed);
-    }
+    // Link establishment is now only triggered on-demand when a message
+    // is too large for opportunistic delivery (see large-message path above).
+    // Speculative background links cause collisions on LoRa when both
+    // devices try to establish simultaneously after exchanging short messages.
 
     return true;
 }

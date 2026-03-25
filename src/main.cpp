@@ -142,14 +142,19 @@ RNS::Bytes encodeAnnounceName(const String& name) {
 }
 
 static void announceWithName() {
-    Serial.println("[ANNOUNCE-TX] announceWithName() entry");
     RNS::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
+    Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes\n",
+        userConfig.settings().displayName.c_str(), (int)appData.size());
+    if (appData.size() > 0) {
+        Serial.printf("[ANNOUNCE-TX] hex: ");
+        for (size_t i = 0; i < appData.size() && i < 20; i++) Serial.printf("%02X", appData.data()[i]);
+        Serial.println();
+    }
     rns.announce(appData);
     ui.statusBar().flashAnnounce();
     ui.statusBar().showToast("Announce sent!");
     ui.lvStatusBar().flashAnnounce();
     ui.lvStatusBar().showToast("Announce sent!");
-    Serial.println("[ANNOUNCE-TX] announceWithName() exit");
 }
 
 // =============================================================================
@@ -785,11 +790,8 @@ void setup() {
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_HOME);
 
         // Initial announce with name
-        RNS::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
-        rns.announce(appData);
+        announceWithName();
         lastAutoAnnounce = millis();
-        ui.statusBar().flashAnnounce();
-        ui.lvStatusBar().flashAnnounce();
         Serial.println("[BOOT] Initial announce sent");
     });
 
@@ -804,8 +806,7 @@ void setup() {
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_HOME);
 
         // Initial announce with name
-        RNS::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
-        rns.announce(appData);
+        announceWithName();
         lastAutoAnnounce = millis();
         Serial.println("[BOOT] Initial announce sent");
     }
@@ -908,10 +909,7 @@ void loop() {
         if (rns.loraInterface() && rns.loraInterface()->airtimeUtilization() > LoRaInterface::AIRTIME_THROTTLE) {
             Serial.println("[AUTO] Skipping announce: LoRa airtime > 25%");
         } else {
-            RNS::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
-            rns.announce(appData);
-            ui.statusBar().flashAnnounce();
-            ui.lvStatusBar().flashAnnounce();
+            announceWithName();
             Serial.println("[AUTO] Periodic announce");
         }
     }
@@ -963,8 +961,7 @@ void loop() {
         }
         if (anyTcpConnected) {
             Serial.println("[TCP] Sending announce over new TCP connection...");
-            RNS::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
-            rns.announce(appData);
+            announceWithName();
             lastAutoAnnounce = millis();
         } else {
             Serial.println("[TCP] No TCP clients connected, skipping announce");

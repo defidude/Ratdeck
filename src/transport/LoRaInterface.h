@@ -2,6 +2,7 @@
 
 #include <Interface.h>
 #include "radio/SX1262.h"
+#include <deque>
 
 class LoRaInterface : public RNS::InterfaceImpl {
 public:
@@ -22,9 +23,27 @@ protected:
     virtual void send_outgoing(const RNS::Bytes& data) override;
 
 private:
+    void transmitNow(const RNS::Bytes& data);
+
     SX1262* _radio;
     bool _txPending = false;
     RNS::Bytes _txData;
+
+    // TX queue: buffer packets when radio is busy instead of dropping
+    static constexpr int TX_QUEUE_MAX = 4;
+    std::deque<RNS::Bytes> _txQueue;
+
+    // Split-packet TX state: when a packet > 254 bytes, send in two LoRa frames
+    bool _splitTxPending = false;
+    RNS::Bytes _splitTxRemaining;
+    uint8_t _splitTxHeader = 0;
+
+    // Split-packet RX state: reassemble two LoRa frames into one Reticulum packet
+    static constexpr unsigned long SPLIT_RX_TIMEOUT_MS = 5000;
+    bool _splitRxPending = false;
+    uint8_t _splitRxSeq = 0;
+    RNS::Bytes _splitRxBuffer;
+    unsigned long _splitRxTimestamp = 0;
 
     unsigned long _airtimeWindowStart = 0;
     float _airtimeAccumMs = 0;

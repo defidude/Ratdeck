@@ -161,6 +161,9 @@ void LvMessageView::refreshUI() {
         _cachedMsgs = std::move(newMsgs);
         _lastMsgCount = (int)_cachedMsgs.size();
         rebuildMessages();
+        // Mark as read since user is actively viewing this conversation
+        _lxmf->markRead(_peerHex);
+        if (_ui) _ui->lvTabBar().setUnreadCount(LvTabBar::TAB_MSGS, _lxmf->unreadCount());
     }
 }
 

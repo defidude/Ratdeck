@@ -55,6 +55,8 @@ private:
 
     bool _active = false;
     bool _connected = false;
+    unsigned long _lastActivityMs = 0;
+    static constexpr unsigned long BLE_IDLE_TIMEOUT_MS = 300000;  // 5 minutes
 
     // HDLC rx state
     std::vector<uint8_t> _rxFrame;

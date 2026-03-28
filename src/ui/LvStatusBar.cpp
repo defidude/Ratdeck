@@ -74,16 +74,22 @@ void LvStatusBar::updateTime() {
 
     time_t now = time(nullptr);
     if (now <= 1700000000) {
-        // No valid time yet — show nothing
         lv_label_set_text(_lblTime, "");
+        _lastHour = -1; _lastMinute = -1;
         return;
     }
 
     struct tm* local = localtime(&now);
     if (!local) {
         lv_label_set_text(_lblTime, "");
+        _lastHour = -1; _lastMinute = -1;
         return;
     }
+
+    // Only update label when minute changes (avoids needless LVGL invalidation)
+    if (local->tm_hour == _lastHour && local->tm_min == _lastMinute) return;
+    _lastHour = local->tm_hour;
+    _lastMinute = local->tm_min;
 
     char buf[8];
     if (_use24h) {

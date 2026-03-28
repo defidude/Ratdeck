@@ -63,6 +63,7 @@ void BLEInterface::stop() {
 
 void BLEInterface::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
     _connected = true;
+    _lastActivityMs = millis();
     Serial.printf("[BLE] Client connected: %s\n", connInfo.getAddress().toString().c_str());
     if (_sideband) _sideband->notifyConnect();
 }
@@ -80,6 +81,7 @@ void BLEInterface::onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo
     const uint8_t* data = val.data();
     size_t len = val.size();
 
+    _lastActivityMs = millis();
     for (size_t i = 0; i < len; i++) {
         processRxByte(data[i]);
     }
@@ -118,6 +120,13 @@ void BLEInterface::processRxByte(uint8_t b) {
 void BLEInterface::loop() {
     if (!_active) return;
 
+    // Disconnect idle BLE clients to free the single connection slot
+    if (_connected && _lastActivityMs > 0 && millis() - _lastActivityMs > BLE_IDLE_TIMEOUT_MS) {
+        Serial.println("[BLE] Idle timeout, disconnecting client");
+        if (_pServer) _pServer->disconnect(0);
+        _lastActivityMs = 0;
+    }
+
     // Process queued incoming frames (mutex: _incomingFrames shared with NimBLE task)
     if (_framesMutex && xSemaphoreTake(_framesMutex, pdMS_TO_TICKS(2)) == pdTRUE) {
         // Swap to local to minimize lock hold time
@@ -140,6 +149,7 @@ void BLEInterface::injectIncoming(const RNS::Bytes& data) {
 
 void BLEInterface::send_outgoing(const RNS::Bytes& data) {
     if (!_connected || !_pTxChar) return;
+    _lastActivityMs = millis();
     sendFrame(data.data(), data.size());
 }
 

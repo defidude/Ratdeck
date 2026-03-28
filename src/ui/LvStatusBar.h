@@ -44,6 +44,8 @@ private:
     bool _gpsFix = false;
     bool _use24h = false;
     int _battPct = -1;
+    int _lastHour = -1;
+    int _lastMinute = -1;
     unsigned long _announceFlashEnd = 0;
     unsigned long _toastEnd = 0;
 };

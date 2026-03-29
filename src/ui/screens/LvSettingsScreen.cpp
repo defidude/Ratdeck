@@ -25,11 +25,16 @@ struct RadioPresetLv {
     uint8_t sf; uint32_t bw; uint8_t cr; int8_t txPower; long preamble;
 };
 static const RadioPresetLv LV_PRESETS[] = {
-    {"Balanced",   9,  125000, 5,  17, 18},
-    {"Long Range", 12,  62500, 8,  22, 18},
-    {"Fast",       7,  250000, 5,  14, 18},
+    {"Short Turbo (21.99 kbps, 140dB)",     7,  500000, 5,  14, 18},
+    {"Short Fast (10.84 kbps, 143dB)",      7,  250000, 5,  14, 18},
+    {"Short Slow (6.25 kbps, 145.5dB)",     8,  250000, 5,  14, 18},
+    {"Medium Fast (3.52 kbps, 148dB)",      9,  250000, 5,  17, 18},
+    {"Medium Slow (1.95 kbps, 150.5dB)",    10, 250000, 5,  17, 18},
+    {"Long Turbo (1.34 kbps, 150dB)",       11, 500000, 8,  22, 18},
+    {"Long Fast (1.07 kbps, 153dB)",        11, 250000, 5,  22, 18},
+    {"Long Moderate (0.34 kbps, 156dB)",    11, 125000, 8,  22, 18},
 };
-static constexpr int LV_NUM_PRESETS = 3;
+static constexpr int LV_NUM_PRESETS = 8;
 
 int LvSettingsScreen::detectPreset() const {
     if (!_cfg) return -1;
@@ -255,7 +260,9 @@ void LvSettingsScreen::buildItems() {
         presetItem.getter = [this]() { int p = detectPreset(); return (p >= 0) ? p : LV_NUM_PRESETS; };
         presetItem.setter = [this](int v) { if (v >= 0 && v < LV_NUM_PRESETS) applyPreset(v); };
         presetItem.minVal = 0; presetItem.maxVal = LV_NUM_PRESETS - 1; presetItem.step = 1;
-        presetItem.enumLabels = {"Balanced", "Long Range", "Fast", "Custom"};
+        presetItem.enumLabels = {};
+        for (int i = 0; i < LV_NUM_PRESETS; i++)
+            presetItem.enumLabels.push_back(LV_PRESETS[i].name);
         _items.push_back(presetItem);
         idx++;
     }

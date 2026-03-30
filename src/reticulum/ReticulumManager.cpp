@@ -3,7 +3,6 @@
 #include "config/Config.h"
 #include <LittleFS.h>
 #include <Preferences.h>
-#include <map>
 #include <unordered_map>
 #include <string>
 
@@ -120,9 +119,13 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
         if (++count > maxRate) return false;
 
         // Skip re-validation of known paths (saves ~100ms Ed25519 per announce)
-        // Allow through once per 5 min for name/ratchet updates.
-        // Uses raw hash bytes as key (avoids expensive toHex + hops_to per packet).
+        // Allow through if better path discovered, or once per 5 min for name/ratchet updates.
+        // Uses raw hash bytes as key (avoids expensive toHex per packet).
         if (RNS::Transport::has_path(packet.destination_hash())) {
+            // Always allow announces with a better (shorter) path through
+            uint8_t existingHops = RNS::Transport::hops_to(packet.destination_hash());
+            if (packet.hops() < existingHops) return true;
+
             static std::unordered_map<std::string, unsigned long> lastRevalidate;
             std::string key((const char*)packet.destination_hash().data(),
                             packet.destination_hash().size());
@@ -157,7 +160,6 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
     _destination.accepts_links(true);
 
     _transportActive = true;
-    startPersistTask();
     Serial.println("[RNS] Endpoint active");
     return true;
 }
@@ -252,68 +254,41 @@ void ReticulumManager::loop() {
     }
 }
 
-// --- Background persist task (runs on core 0) ---
-// Flash writes take 0.5-4+ seconds on LittleFS. Running them on core 0
-// keeps the main loop (core 1) responsive for UI and radio.
-
-void ReticulumManager::startPersistTask() {
-    _persistQueue = xQueueCreate(1, sizeof(uint8_t));
-    xTaskCreatePinnedToCore(persistTaskFunc, "persist", 8192, this, 1, &_persistTask, 0);
-    Serial.println("[RNS] Persist task started on core 0");
-}
-
-void ReticulumManager::persistTaskFunc(void* param) {
-    ReticulumManager* self = (ReticulumManager*)param;
-    uint8_t cycle;
-    for (;;) {
-        if (xQueueReceive(self->_persistQueue, &cycle, portMAX_DELAY) == pdTRUE) {
-            unsigned long start = millis();
-            switch (cycle) {
-                case 0:
-                    RNS::Transport::persist_data();
-                    break;
-                case 1:
-                    RNS::Identity::persist_data();
-                    break;
-                case 2:
-                    if (self->_sd && self->_sd->isReady()) {
-                        static const char* files[] = {"/destination_table", "/packet_hashlist", "/known_destinations"};
-                        for (const char* name : files) {
-                            File f = LittleFS.open(name, "r");
-                            if (f && f.size() > 0) {
-                                size_t sz = f.size();
-                                uint8_t* buf = (uint8_t*)malloc(sz);
-                                if (buf) {
-                                    f.readBytes((char*)buf, sz);
-                                    char sdPath[64];
-                                    snprintf(sdPath, sizeof(sdPath), "/ratputer/transport%s", name);
-                                    self->_sd->ensureDir("/ratputer/transport");
-                                    self->_sd->writeSimple(sdPath, buf, sz);
-                                    free(buf);
-                                }
-                            }
-                            if (f) f.close();
+// Synchronous persist — one cycle per call to spread I/O across intervals.
+// Runs on core 1 (main loop) to avoid data races with microReticulum's
+// single-threaded transport state.
+void ReticulumManager::persistData() {
+    unsigned long start = millis();
+    switch (_persistCycle) {
+        case 0:
+            RNS::Transport::persist_data();
+            break;
+        case 1:
+            RNS::Identity::persist_data();
+            break;
+        case 2:
+            if (_sd && _sd->isReady()) {
+                static const char* files[] = {"/destination_table", "/packet_hashlist", "/known_destinations"};
+                for (const char* name : files) {
+                    File f = LittleFS.open(name, "r");
+                    if (f && f.size() > 0) {
+                        size_t sz = f.size();
+                        uint8_t* buf = (uint8_t*)malloc(sz);
+                        if (buf) {
+                            f.readBytes((char*)buf, sz);
+                            char sdPath[64];
+                            snprintf(sdPath, sizeof(sdPath), "/ratputer/transport%s", name);
+                            _sd->ensureDir("/ratputer/transport");
+                            _sd->writeSimple(sdPath, buf, sz);
+                            free(buf);
                         }
                     }
-                    break;
+                    if (f) f.close();
+                }
             }
-            Serial.printf("[PERSIST] Cycle %d done (%lums, core %d)\n",
-                          cycle, millis() - start, xPortGetCoreID());
-        }
+            break;
     }
-}
-
-void ReticulumManager::persistData() {
-    if (_persistQueue) {
-        // Queue the cycle for background execution — non-blocking
-        xQueueOverwrite(_persistQueue, &_persistCycle);
-    } else {
-        // Fallback: synchronous (before task is started)
-        switch (_persistCycle) {
-            case 0: RNS::Transport::persist_data(); break;
-            case 1: RNS::Identity::persist_data(); break;
-        }
-    }
+    Serial.printf("[PERSIST] Cycle %d done (%lums)\n", _persistCycle, millis() - start);
     _persistCycle = (_persistCycle + 1) % 3;
 }
 

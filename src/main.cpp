@@ -1059,9 +1059,9 @@ void loop() {
         }
     }
 
-    // 8. WiFi + TCP loops (with global budget) — skip if RNS was overloaded
+    // 8. WiFi + TCP loops (with global budget) — skip only if RNS severely overloaded
     {
-        bool skipTcp = (rnsDuration > 200);
+        bool skipTcp = (rnsDuration > 500);
         if (!skipTcp && wifiImpl) wifiImpl->loop();
         if (!skipTcp) {
             unsigned long tcpBudgetStart = millis();

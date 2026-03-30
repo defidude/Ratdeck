@@ -59,7 +59,10 @@ struct UserSettings {
     bool use24HourTime = false;      // false = 12h (no AM/PM), true = 24h
 
     // Audio
-    bool audioEnabled = true;
+    bool audioBootEnabled = true;
+    bool audioMsgEnabled = true;
+    bool audioAnnounceEnabled = true;
+    bool audioErrorEnabled = true;
     uint8_t audioVolume = 80;  // 0-100
 
     // Identity

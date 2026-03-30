@@ -452,9 +452,24 @@ void LvSettingsScreen::buildItems() {
 
     // Audio
     int audioStart = idx;
-    _items.push_back({"Audio", SettingType::TOGGLE,
-        [&s]() { return s.audioEnabled ? 1 : 0; },
-        [&s](int v) { s.audioEnabled = (v != 0); },
+    _items.push_back({"Boot", SettingType::TOGGLE,
+        [&s]() { return s.audioBootEnabled ? 1 : 0; },
+        [&s](int v) { s.audioBootEnabled = (v != 0); },
+        [](int v) { return v ? String("ON") : String("OFF"); }});
+    idx++;
+    _items.push_back({"Messages", SettingType::TOGGLE,
+        [&s]() { return s.audioMsgEnabled ? 1 : 0; },
+        [&s](int v) { s.audioMsgEnabled = (v != 0); },
+        [](int v) { return v ? String("ON") : String("OFF"); }});
+    idx++;
+    _items.push_back({"Announces", SettingType::TOGGLE,
+        [&s]() { return s.audioAnnounceEnabled ? 1 : 0; },
+        [&s](int v) { s.audioAnnounceEnabled = (v != 0); },
+        [](int v) { return v ? String("ON") : String("OFF"); }});
+    idx++;
+    _items.push_back({"Errors", SettingType::TOGGLE,
+        [&s]() { return s.audioErrorEnabled ? 1 : 0; },
+        [&s](int v) { s.audioErrorEnabled = (v != 0); },
         [](int v) { return v ? String("ON") : String("OFF"); }});
     idx++;
     _items.push_back({"Volume", SettingType::INTEGER,
@@ -462,7 +477,7 @@ void LvSettingsScreen::buildItems() {
         [](int v) { return String(v) + "%"; }, 0, 100, 10});
     idx++;
     _categories.push_back({"Audio", audioStart, idx - audioStart,
-        [&s]() { return s.audioEnabled ? (String(s.audioVolume) + "%") : String("OFF"); }});
+        [&s]() { return s.audioBootEnabled || s.audioMsgEnabled || s.audioAnnounceEnabled || s.audioErrorEnabled ? (String(s.audioVolume) + "%") : String("OFF"); }});
 
     // Info (diagnostics moved from Home screen)
     int infoStart = idx;
@@ -1345,7 +1360,10 @@ void LvSettingsScreen::applyAndSave() {
         _radio->receive();
     }
     if (_audio) {
-        _audio->setEnabled(s.audioEnabled);
+        _audio->setBootEnabled(s.audioBootEnabled);
+        _audio->setMsgEnabled(s.audioMsgEnabled);
+        _audio->setAnnounceEnabled(s.audioAnnounceEnabled);
+        _audio->setErrorEnabled(s.audioErrorEnabled);
         _audio->setVolume(s.audioVolume);
     }
 

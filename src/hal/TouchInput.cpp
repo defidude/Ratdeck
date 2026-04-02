@@ -29,6 +29,13 @@ bool TouchInput::begin() {
     return true;
 }
 
+void TouchInput::setBorders(int16_t x_min, int16_t y_min, int16_t x_max, int16_t y_max) {
+    _x_min = x_min;
+    _y_min = y_min;
+    _x_max = x_max;
+    _y_max = y_max;
+}
+
 void TouchInput::update() {
     readGT911();
 }
@@ -86,16 +93,21 @@ bool TouchInput::readGT911() {
     _y = TFT_HEIGHT - 1 - _y;
     _touched = true;
 
+    // Remap
+    _x = (_x - _x_min) * 320 / (_x_max - _x_min);
+    _y = (_y - _y_min) * 240 / (_y_max - _y_min);
+
+    if (_x < 0) _x = 0;
+    if (_x > 319) _x = 319;
+    if (_y < 0) _y = 0;
+    if (_y > 239) _y = 239;
+
     // Clear buffer status
     Wire.beginTransmission(_i2cAddress);
     Wire.write(0x81);
     Wire.write(0x4E);
     Wire.write(0x00);
     Wire.endTransmission();
-
-    // TODO: remove
-    Serial.write("[TOUCH] id "); Serial.print(trackId); Serial.write(" @ ");
-    Serial.print(_x); Serial.write(' '); Serial.println(_y);
 
     return true;
 }

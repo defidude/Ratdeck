@@ -122,7 +122,7 @@ void InputManager::update() {
         unsigned long now = millis();
         if (now - _lastTouchPoll >= TOUCH_POLL_MS) {
             _lastTouchPoll = now;
-            // _touch->update();
+            _touch->update();
             if (_touch->isTouched()) {
                 _activity = true;
                 _strongActivity = true;

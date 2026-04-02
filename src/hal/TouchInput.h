@@ -14,6 +14,7 @@ public:
     int16_t y() const { return _y; }
 
     void update();
+    void setBorders(int16_t x_min, int16_t y_min, int16_t x_max, int16_t y_max);
 
 private:
     bool readGT911();
@@ -23,6 +24,10 @@ private:
     bool _touched = false;
     int16_t _x = 0;
     int16_t _y = 0;
+    int16_t _x_min = 10;
+    int16_t _y_min = 8;
+    int16_t _x_max = 313;
+    int16_t _y_max = 243;
 
     static TouchInput* _instance;
 };

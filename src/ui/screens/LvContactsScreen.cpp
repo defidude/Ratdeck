@@ -42,7 +42,20 @@ void LvContactsScreen::createUI(lv_obj_t* parent) {
         lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_set_style_radius(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_user_data(row, (void*)(intptr_t)i);
+        lv_obj_add_event_cb(row, [](lv_event_t* e) {
+            auto* self = (LvContactsScreen*)lv_event_get_user_data(e);
+            int poolIdx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+            int dataIdx = self->_viewportStart + poolIdx;
+            if (dataIdx < (int)self->_contactIndices.size() && self->_onSelect) {
+                self->_selectedIdx = dataIdx;
+                self->syncVisibleRows();
+                int nodeIdx = self->_contactIndices[dataIdx];
+                self->_onSelect(self->_am->nodes()[nodeIdx].hash.toHex());
+            }
+        }, LV_EVENT_CLICKED, this);
 
         lv_obj_t* lbl = lv_label_create(row);
         lv_obj_set_style_text_font(lbl, font, 0);

@@ -121,14 +121,24 @@ static uint32_t s_lastKey = 0;
 static lv_indev_state_t s_keyState = LV_INDEV_STATE_RELEASED;
 static bool s_keyReady = false;
 
+// Touch cursor auto-hide after 1s of no touch
+static unsigned long s_lastTouchMs = 0;
+static bool s_cursorVisible = false;
+
 static void touchpad_read_cb(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
     if (s_touch->isTouched()) {
         lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+        s_cursorVisible = true;
+        s_lastTouchMs = millis();
         data->state = LV_INDEV_STATE_PR;
         data->point.x = s_touch->x();
         data->point.y = s_touch->y();
     } else {
-        data->state =  LV_INDEV_STATE_REL;
+        data->state = LV_INDEV_STATE_REL;
+        if (s_cursorVisible && millis() - s_lastTouchMs > 1000) {
+            lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+            s_cursorVisible = false;
+        }
     }
 }
 
@@ -168,12 +178,21 @@ void init(Keyboard* kb, Trackball* tb, TouchInput* touch) {
     lv_indev_t* touchIndev = lv_indev_drv_register(&touchDrv);
     lv_indev_set_group(touchIndev, s_group);
 
-    s_cursor = lv_img_create(lv_layer_sys());
-    lv_img_set_src(s_cursor, &mouse_cursor_icon);
+    // Touch cursor: black center with thin green ring (on-brand, minimal)
+    s_cursor = lv_obj_create(lv_layer_sys());
+    lv_obj_set_size(s_cursor, 12, 12);
+    lv_obj_set_style_radius(s_cursor, 6, 0);
+    lv_obj_set_style_bg_color(s_cursor, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_cursor, LV_OPA_COVER, 0);
+    lv_obj_set_style_outline_color(s_cursor, lv_color_hex(0x00FF41), 0);
+    lv_obj_set_style_outline_width(s_cursor, 1, 0);
+    lv_obj_set_style_outline_opa(s_cursor, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_cursor, 0, 0);
+    lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_indev_set_cursor(touchIndev, s_cursor);
     lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
 
-    Serial.println("[LVGL] Input drivers registered (touch disabled)");
+    Serial.println("[LVGL] Input drivers registered (touch enabled)");
 }
 
 void feedKey(const KeyEvent& evt) {

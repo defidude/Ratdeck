@@ -29,13 +29,6 @@ bool TouchInput::begin() {
     return true;
 }
 
-void TouchInput::setBorders(int16_t x_min, int16_t y_min, int16_t x_max, int16_t y_max) {
-    _x_min = x_min;
-    _y_min = y_min;
-    _x_max = x_max;
-    _y_max = y_max;
-}
-
 void TouchInput::update() {
     readGT911();
 }
@@ -93,14 +86,14 @@ bool TouchInput::readGT911() {
     _y = TFT_HEIGHT - 1 - _y;
     _touched = true;
 
-    // Remap
-    _x = (_x - _x_min) * 320 / (_x_max - _x_min);
-    _y = (_y - _y_min) * 240 / (_y_max - _y_min);
+    // Remap touchpad coordinates to display bounds
+    _x = (_x - TOUCH_X_MIN) * (TFT_WIDTH - 1) / (TOUCH_X_MAX - TOUCH_X_MIN);
+    _y = (_y - TOUCH_Y_MIN) * (TFT_HEIGHT - 1) / (TOUCH_Y_MAX - TOUCH_Y_MIN);
 
     if (_x < 0) _x = 0;
-    if (_x > 319) _x = 319;
+    if (_x >= TFT_WIDTH) _x = TFT_WIDTH - 1;
     if (_y < 0) _y = 0;
-    if (_y > 239) _y = 239;
+    if (_y >= TFT_HEIGHT) _y = TFT_HEIGHT - 1;
 
     // Clear buffer status
     Wire.beginTransmission(_i2cAddress);

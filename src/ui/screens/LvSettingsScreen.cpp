@@ -740,6 +740,14 @@ void LvSettingsScreen::rebuildCategoryList() {
         lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_set_style_radius(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_user_data(row, (void*)(intptr_t)i);
+        lv_obj_add_event_cb(row, [](lv_event_t* e) {
+            auto* self = (LvSettingsScreen*)lv_event_get_user_data(e);
+            int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+            self->_categoryIdx = idx;
+            self->enterCategory(idx);
+        }, LV_EVENT_CLICKED, this);
 
         // Category name + count
         char buf[48];
@@ -787,6 +795,12 @@ void LvSettingsScreen::rebuildItemList() {
     lv_obj_set_style_pad_all(headerRow, 0, 0);
     lv_obj_set_style_radius(headerRow, 0, 0);
     lv_obj_clear_flag(headerRow, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(headerRow, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(headerRow, [](lv_event_t* e) {
+        auto* self = (LvSettingsScreen*)lv_event_get_user_data(e);
+        self->exitToCategories();
+    }, LV_EVENT_CLICKED, this);
+
     char headerBuf[48];
     snprintf(headerBuf, sizeof(headerBuf), "< %s", _categories[_categoryIdx].name);
     lv_obj_t* headerLbl = lv_label_create(headerRow);
@@ -809,6 +823,25 @@ void LvSettingsScreen::rebuildItemList() {
         lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_set_style_radius(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        if (editable) {
+            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_user_data(row, (void*)(intptr_t)i);
+            lv_obj_add_event_cb(row, [](lv_event_t* e) {
+                auto* self = (LvSettingsScreen*)lv_event_get_user_data(e);
+                int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+                // Cancel any in-progress edit before switching items
+                if (self->_editing || self->_textEditing || self->_freqEditing) {
+                    self->_editing = false;
+                    self->_textEditing = false;
+                    self->_freqEditing = false;
+                    self->_numericTyping = false;
+                }
+                self->_selectedIdx = idx;
+                KeyEvent tap = {};
+                tap.enter = true;
+                self->handleKey(tap);
+            }, LV_EVENT_CLICKED, this);
+        }
 
         // Label
         lv_obj_t* nameLbl = lv_label_create(row);

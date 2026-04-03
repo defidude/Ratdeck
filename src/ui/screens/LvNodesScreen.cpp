@@ -47,7 +47,22 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
         lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_set_style_radius(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_user_data(row, (void*)(intptr_t)i);
+        lv_obj_add_event_cb(row, [](lv_event_t* e) {
+            auto* self = (LvNodesScreen*)lv_event_get_user_data(e);
+            int poolIdx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+            int entryIdx = self->_viewportStart + poolIdx;
+            if (entryIdx < self->_totalEntries) {
+                self->_selectedIdx = entryIdx;
+                self->syncVisibleRows();
+                int nodeIdx = self->getNodeIdxForEntry(entryIdx);
+                if (nodeIdx >= 0 && nodeIdx < (int)self->_am->nodes().size()) {
+                    self->showActionMenu(nodeIdx);
+                }
+            }
+        }, LV_EVENT_CLICKED, this);
 
         lv_obj_t* nameLbl = lv_label_create(row);
         lv_obj_set_style_text_font(nameLbl, font, 0);
@@ -71,10 +86,11 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
     updateSortOrder();
     syncVisibleRows();
 
-    // --- Action modal overlay (hidden initially) ---
-    _overlay = lv_obj_create(parent);
+    // --- Action modal overlay (hidden initially, on top layer so it floats above scroll) ---
+    _overlay = lv_obj_create(lv_layer_top());
     lv_obj_set_size(_overlay, 180, 100);
-    lv_obj_set_pos(_overlay, (Theme::CONTENT_W - 180) / 2, (Theme::CONTENT_H - 100) / 2);
+    // Center on screen (accounting for status bar offset)
+    lv_obj_set_pos(_overlay, (320 - 180) / 2, 20 + (Theme::CONTENT_H - 100) / 2);
     lv_obj_set_style_bg_color(_overlay, lv_color_hex(0x001100), 0);
     lv_obj_set_style_bg_opa(_overlay, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(_overlay, 1, 0);
@@ -90,10 +106,34 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
 
     const char* menuText[] = {"Add Contact", "Message", "Back"};
     for (int i = 0; i < 3; i++) {
-        _menuLabels[i] = lv_label_create(_overlay);
+        // Use a container for each menu item so it's tappable with a larger hit area
+        lv_obj_t* btn = lv_obj_create(_overlay);
+        lv_obj_set_size(btn, 166, 26);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(Theme::BG), 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_set_style_radius(btn, 3, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_user_data(btn, (void*)(intptr_t)i);
+        lv_obj_add_event_cb(btn, [](lv_event_t* e) {
+            auto* self = (LvNodesScreen*)lv_event_get_user_data(e);
+            int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+            self->_menuIdx = idx;
+            // Simulate enter key to execute the menu action
+            KeyEvent tap = {};
+            tap.enter = true;
+            self->handleKey(tap);
+        }, LV_EVENT_CLICKED, this);
+
+        _menuLabels[i] = lv_label_create(btn);
         lv_obj_set_style_text_font(_menuLabels[i], &lv_font_ratdeck_14, 0);
         lv_obj_set_style_text_color(_menuLabels[i], lv_color_hex(Theme::PRIMARY), 0);
         lv_label_set_text(_menuLabels[i], menuText[i]);
+        lv_obj_center(_menuLabels[i]);
+
+        _menuBtns[i] = btn;
     }
 
     // Nickname input widgets (hidden in menu mode)
@@ -340,7 +380,7 @@ void LvNodesScreen::showActionMenu(int nodeIdx) {
     _actionState = NodeAction::ACTION_MENU;
     _nicknameText = "";
     if (_overlay) {
-        for (int i = 0; i < 3; i++) lv_obj_clear_flag(_menuLabels[i], LV_OBJ_FLAG_HIDDEN);
+        for (int i = 0; i < 3; i++) lv_obj_clear_flag(_menuBtns[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(_nicknameBox, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
         updateMenuSelection();
@@ -360,7 +400,7 @@ void LvNodesScreen::showNicknameInput() {
     if (_am && _actionNodeIdx >= 0 && _actionNodeIdx < (int)_am->nodes().size()) {
         _nicknameText = String(_am->nodes()[_actionNodeIdx].name.c_str());
     }
-    for (int i = 0; i < 3; i++) lv_obj_add_flag(_menuLabels[i], LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 3; i++) lv_obj_add_flag(_menuBtns[i], LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(_nicknameBox, LV_OBJ_FLAG_HIDDEN);
     updateNicknameDisplay();
 }
@@ -370,12 +410,9 @@ void LvNodesScreen::updateMenuSelection() {
         bool sel = (i == _menuIdx);
         lv_obj_set_style_text_color(_menuLabels[i], lv_color_hex(
             sel ? Theme::BG : Theme::PRIMARY), 0);
-        lv_obj_set_style_bg_color(_menuLabels[i], lv_color_hex(
+        lv_obj_set_style_bg_color(_menuBtns[i], lv_color_hex(
             sel ? Theme::PRIMARY : 0x001100), 0);
-        lv_obj_set_style_bg_opa(_menuLabels[i], LV_OPA_COVER, 0);
-        lv_obj_set_style_pad_left(_menuLabels[i], 8, 0);
-        lv_obj_set_style_pad_right(_menuLabels[i], 8, 0);
-        lv_obj_set_style_pad_top(_menuLabels[i], 2, 0);
+        lv_obj_set_style_bg_opa(_menuBtns[i], LV_OPA_COVER, 0);
         lv_obj_set_style_pad_bottom(_menuLabels[i], 2, 0);
         lv_obj_set_style_radius(_menuLabels[i], 3, 0);
     }

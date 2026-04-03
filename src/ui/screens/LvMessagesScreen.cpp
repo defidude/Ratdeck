@@ -48,7 +48,20 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
         lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_set_style_radius(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_user_data(row, (void*)(intptr_t)i);
+        lv_obj_add_event_cb(row, [](lv_event_t* e) {
+            auto* self = (LvMessagesScreen*)lv_event_get_user_data(e);
+            lv_obj_t* target = lv_event_get_target(e);
+            int poolIdx = (int)(intptr_t)lv_obj_get_user_data(target);
+            int dataIdx = self->_viewportStart + poolIdx;
+            if (dataIdx < (int)self->_sortedPeers.size() && self->_onOpen) {
+                self->_selectedIdx = dataIdx;
+                self->syncVisibleRows();
+                self->_onOpen(self->_sortedPeers[dataIdx]);
+            }
+        }, LV_EVENT_CLICKED, this);
 
         // Unread dot
         lv_obj_t* dot = lv_obj_create(row);

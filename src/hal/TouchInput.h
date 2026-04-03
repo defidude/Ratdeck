@@ -14,7 +14,6 @@ public:
     int16_t y() const { return _y; }
 
     void update();
-    void setBorders(int16_t x_min, int16_t y_min, int16_t x_max, int16_t y_max);
 
 private:
     bool readGT911();
@@ -24,10 +23,13 @@ private:
     bool _touched = false;
     int16_t _x = 0;
     int16_t _y = 0;
-    int16_t _x_min = 10;
-    int16_t _y_min = 8;
-    int16_t _x_max = 313;
-    int16_t _y_max = 243;
+
+    // GT911 raw coordinate bounds (touchpad is slightly larger than display area).
+    // Calibrated on T-Deck Plus — consistent across multiple devices.
+    static constexpr int16_t TOUCH_X_MIN = 10;
+    static constexpr int16_t TOUCH_Y_MIN = 8;
+    static constexpr int16_t TOUCH_X_MAX = 313;
+    static constexpr int16_t TOUCH_Y_MAX = 243;
 
     static TouchInput* _instance;
 };

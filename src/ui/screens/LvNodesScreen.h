@@ -54,6 +54,7 @@ private:
     // Overlay widgets
     lv_obj_t* _overlay = nullptr;
     lv_obj_t* _menuLabels[3] = {};
+    lv_obj_t* _menuBtns[3] = {};
     lv_obj_t* _nicknameBox = nullptr;
     lv_obj_t* _nicknameLbl = nullptr;
     lv_obj_t* _nicknameHint = nullptr;

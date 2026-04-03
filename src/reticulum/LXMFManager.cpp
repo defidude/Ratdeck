@@ -189,17 +189,22 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
     // Fallback: opportunistic or queue for link-based resource transfer
     if (!sent) {
         RNS::Bytes payloadBytes(payload.data(), payload.size());
-        if (payloadBytes.size() <= RNS::Type::Reticulum::MDU) {
-            // Small enough for single opportunistic packet
+        // Use opportunistic only for packets that fit in a single LoRa frame (254 bytes).
+        // Larger packets require split-frame over LoRa, which is unreliable — any single
+        // frame loss (CRC error, collision, half-duplex timing) kills the entire transfer
+        // with no recovery. Link-based delivery handles retransmission at the protocol level.
+        static constexpr size_t SINGLE_FRAME_MAX = 254;
+        if (payloadBytes.size() <= SINGLE_FRAME_MAX) {
+            // Fits in single LoRa frame — send opportunistic
             Serial.printf("[LXMF] sending opportunistic: %d bytes to %s\n",
                           (int)payloadBytes.size(), outDest.hash().toHex().substr(0, 12).c_str());
             RNS::Packet packet(outDest, payloadBytes);
             RNS::PacketReceipt receipt = packet.send();
             if (receipt) { sent = true; }
         } else {
-            // Too large for opportunistic — need link + resource transfer
-            Serial.printf("[LXMF] Message too large for opportunistic (%d bytes > MDU), needs link (retry %d)\n",
-                          (int)payloadBytes.size(), msg.retries);
+            // Too large for single frame — need link + resource transfer
+            Serial.printf("[LXMF] Message needs link delivery (%d bytes > %d single-frame), retry %d\n",
+                          (int)payloadBytes.size(), (int)SINGLE_FRAME_MAX, msg.retries);
             if (msg.retries % 3 == 0 && (!_outLink || _outLinkDestHash != msg.destHash
                 || _outLink.status() != RNS::Type::Link::ACTIVE)) {
                 _outLinkPendingHash = msg.destHash;

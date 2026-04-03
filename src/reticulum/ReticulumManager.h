@@ -52,6 +52,7 @@ public:
 
     void announce(const RNS::Bytes& appData = {});
     unsigned long lastAnnounceTime() const { return _lastAnnounceTime; }
+    static uint32_t announceFilterCount() { return _announceFilterCount; }
 
     RNS::Destination& destination() { return _destination; }
     LoRaInterface* loraInterface() { return _loraImpl; }
@@ -71,4 +72,5 @@ private:
     unsigned long _lastPersist = 0;
     unsigned long _lastAnnounceTime = 0;
     uint8_t _persistCycle = 0;  // Rotating: 0=Transport, 1=Identity, 2=SD backup
+    static uint32_t _announceFilterCount;
 };

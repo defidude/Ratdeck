@@ -65,4 +65,5 @@ private:
 
 public:
     unsigned long lastRxTime() const { return _lastRxTime; }
+    unsigned long hubRxCount() const { return _hubRxCount; }
 };

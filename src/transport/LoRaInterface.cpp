@@ -50,10 +50,17 @@ void LoRaInterface::send_outgoing(const RNS::Bytes& data) {
         return;
     }
 
-    if (_txPending || _splitTxPending) {
+    // Queue TX when radio is busy OR when we're waiting for split frame 2.
+    // Transmitting during split RX would put the radio in TX mode, causing
+    // frame 2 to be lost (LoRa is half-duplex).
+    if (_txPending || _splitTxPending || _splitRxPending) {
         if ((int)_txQueue.size() < TX_QUEUE_MAX) {
             _txQueue.push_back(data);
-            Serial.printf("[LORA_IF] TX queued (%d in queue)\n", (int)_txQueue.size());
+            if (_splitRxPending) {
+                Serial.printf("[LORA_IF] TX deferred (split RX pending, %d in queue)\n", (int)_txQueue.size());
+            } else {
+                Serial.printf("[LORA_IF] TX queued (%d in queue)\n", (int)_txQueue.size());
+            }
         } else {
             Serial.println("[LORA_IF] TX queue full, dropping oldest");
             _txQueue.pop_front();
@@ -132,19 +139,19 @@ void LoRaInterface::loop() {
             if (_splitTxPending) {
                 _splitTxPending = false;
 
-                Serial.printf("[LORA_IF] TX SPLIT frame 2: %d+1 bytes\n",
-                    (int)_splitTxRemaining.size());
+                size_t frame2Size = _splitTxRemaining.size();
+                Serial.printf("[LORA_IF] TX SPLIT frame 2: %d+1 bytes\n", (int)frame2Size);
 
                 _radio->beginPacket();
                 _radio->write(_splitTxHeader);
-                _radio->write(_splitTxRemaining.data(), _splitTxRemaining.size());
+                _radio->write(_splitTxRemaining.data(), frame2Size);
                 _radio->endPacket(true);
 
                 _txPending = true;
                 _splitTxRemaining = RNS::Bytes();
 
-                // Track airtime for second frame
-                float airtimeMs = _radio->getAirtime(_splitTxRemaining.size() + RNODE_HEADER_L);
+                // Track airtime for second frame (must use saved size before clear)
+                float airtimeMs = _radio->getAirtime(frame2Size + RNODE_HEADER_L);
                 _airtimeAccumMs += airtimeMs;
                 return;
             }
@@ -162,11 +169,17 @@ void LoRaInterface::loop() {
         return;
     }
 
-    // Split RX timeout: discard stale partial packets
+    // Split RX timeout: discard stale partial packets and drain deferred TX
     if (_splitRxPending && (millis() - _splitRxTimestamp > SPLIT_RX_TIMEOUT_MS)) {
         Serial.println("[LORA_IF] RX SPLIT timeout, discarding partial");
         _splitRxPending = false;
         _splitRxBuffer = RNS::Bytes();
+        // Drain any TX that was deferred during split RX hold
+        if (!_txQueue.empty() && !_txPending) {
+            RNS::Bytes next = _txQueue.front();
+            _txQueue.pop_front();
+            transmitNow(next);
+        }
     }
 
     // Periodic RX debug
@@ -231,13 +244,19 @@ void LoRaInterface::loop() {
             InterfaceImpl::handle_incoming(_splitRxBuffer);
             _splitRxBuffer = RNS::Bytes();
 
-            if (!_txPending) {
+            // Drain any TX that was deferred during split RX hold
+            if (!_txQueue.empty() && !_txPending) {
+                RNS::Bytes next = _txQueue.front();
+                _txQueue.pop_front();
+                transmitNow(next);
+            } else if (!_txPending) {
                 _radio->receive();
             }
             return;
         } else {
-            // Sequence mismatch — discard old, start new
-            Serial.printf("[LORA_IF] RX SPLIT seq mismatch (had 0x%02X, got 0x%02X), restarting\n",
+            // Different split packet's frame 1 arrived — the previous split is lost.
+            // This happens when frame 2 was missed (radio was busy, collision, etc.)
+            Serial.printf("[LORA_IF] RX SPLIT new seq (had 0x%02X, got 0x%02X), previous frame 2 lost\n",
                 _splitRxSeq, seq);
             _splitRxSeq = seq;
             _splitRxBuffer = RNS::Bytes(raw + RNODE_HEADER_L, payloadSize);
@@ -247,11 +266,11 @@ void LoRaInterface::loop() {
         }
     }
 
-    // Non-split packet — if we were waiting for split frame 2, discard the partial
+    // Non-split packet while waiting for split frame 2:
+    // Process the non-split packet normally but KEEP the split buffer.
+    // Frame 2 may still arrive after this interleaving packet.
     if (_splitRxPending) {
-        Serial.println("[LORA_IF] RX non-split while waiting for split frame 2, discarding partial");
-        _splitRxPending = false;
-        _splitRxBuffer = RNS::Bytes();
+        Serial.printf("[LORA_IF] RX non-split %d bytes while awaiting split frame 2 (kept)\n", payloadSize);
     }
 
     Serial.printf("[LORA_IF] RX %d bytes (hdr=0x%02X, payload=%d), RSSI=%d, SNR=%.1f\n",

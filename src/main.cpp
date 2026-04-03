@@ -133,6 +133,9 @@ constexpr unsigned long TCP_GLOBAL_BUDGET_MS = 35;      // Max cumulative TCP ti
 bool wifiDeferredAnnounce = false;
 unsigned long wifiConnectedAt = 0;
 
+// LXMF diagnostic counters (reset each heartbeat)
+static uint32_t diagTcpSkipEvents = 0;
+
 // =============================================================================
 // Timezone helper — returns POSIX TZ string for current config
 // =============================================================================
@@ -1062,6 +1065,7 @@ void loop() {
     // 8. WiFi + TCP loops (with global budget) — skip only if RNS severely overloaded
     {
         bool skipTcp = (rnsDuration > 500);
+        if (skipTcp) diagTcpSkipEvents++;
         if (!skipTcp && wifiImpl) wifiImpl->loop();
         if (!skipTcp) {
             unsigned long tcpBudgetStart = millis();
@@ -1157,10 +1161,18 @@ void loop() {
             {
                 auto& ifaces = RNS::Transport::get_interfaces();
                 int tcpUp = 0;
-                for (auto* tcp : tcpClients) { if (tcp && tcp->isConnected()) tcpUp++; }
+                int tcpRx = 0;
+                for (auto* tcp : tcpClients) {
+                    if (tcp && tcp->isConnected()) tcpUp++;
+                    if (tcp) tcpRx += tcp->hubRxCount();
+                }
                 Serial.printf("[HEART-DIAG] ifaces=%d tcp=%d/%d wifi=%s\n",
                     (int)ifaces.size(), tcpUp, (int)tcpClients.size(),
                     wifiSTAConnected ? "STA" : (wifiImpl ? "AP" : "OFF"));
+                Serial.printf("[LXMF-DIAG] tcp_rx=%d tcp_skip=%lu ann_filt=%lu\n",
+                    tcpRx, (unsigned long)diagTcpSkipEvents,
+                    (unsigned long)rns.announceFilterCount());
+                diagTcpSkipEvents = 0;
             }
 #if HAS_GPS
             if (userConfig.settings().gpsTimeEnabled) {

@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <string>
 
+uint32_t ReticulumManager::_announceFilterCount = 0;
+
 bool LittleFSFileSystem::init() { return true; }
 bool LittleFSFileSystem::file_exists(const char* p) { return LittleFS.exists(p); }
 
@@ -116,7 +118,7 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
 
         // Adaptive rate: tighter during first 60s boot flood, then normal
         unsigned int maxRate = (now < 60000) ? 3 : RATDECK_MAX_ANNOUNCES_PER_SEC;
-        if (++count > maxRate) return false;
+        if (++count > maxRate) { ReticulumManager::_announceFilterCount++; return false; }
 
         // Skip re-validation of known paths (saves ~100ms Ed25519 per announce)
         // Allow through if better path discovered, or once per 5 min for name/ratchet updates.
@@ -131,7 +133,10 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
                             packet.destination_hash().size());
 
             auto it = lastRevalidate.find(key);
-            if (it != lastRevalidate.end() && (now - it->second) < 300000) return false;
+            if (it != lastRevalidate.end() && (now - it->second) < 300000) {
+                ReticulumManager::_announceFilterCount++;
+                return false;
+            }
             lastRevalidate[key] = now;
 
             if (lastRevalidate.size() > 300) lastRevalidate.clear();
@@ -288,7 +293,11 @@ void ReticulumManager::persistData() {
             }
             break;
     }
-    Serial.printf("[PERSIST] Cycle %d done (%lums)\n", _persistCycle, millis() - start);
+    unsigned long dur = millis() - start;
+    Serial.printf("[PERSIST] Cycle %d done (%lums)\n", _persistCycle, dur);
+    if (dur > 500) {
+        Serial.printf("[PERSIST] WARNING: Cycle %d blocked for %lums!\n", _persistCycle, dur);
+    }
     _persistCycle = (_persistCycle + 1) % 3;
 }
 

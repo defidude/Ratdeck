@@ -83,9 +83,9 @@ void TCPClientInterface::loop() {
         return;  // Will reconnect on next loop iteration
     }
 
-    // Drain incoming frames per loop (up to 10, time-boxed)
+    // Drain incoming frames per loop (up to 15, time-boxed)
     unsigned long tcpStart = millis();
-    for (int i = 0; i < 10 && _client.available() && (millis() - tcpStart < TCP_LOOP_BUDGET_MS); i++) {
+    for (int i = 0; i < 15 && _client.available() && (millis() - tcpStart < TCP_LOOP_BUDGET_MS); i++) {
         unsigned long rxStart = millis();
         int len = readFrame();
         if (len > 0) {
@@ -151,7 +151,7 @@ void TCPClientInterface::send_outgoing(const RNS::Bytes& data) {
             Serial.printf("[TCP-DIAG] *** PROOF packet being sent via TCP! ***\n");
         }
 
-        if (packet_type != 0x01) {  // Not ANNOUNCE
+        if (packet_type != 0x01 && packet_type != 0x03) {  // Not ANNOUNCE, not PROOF
             if (header_type == 0) {
                 // Header1 → wrap as Header2 (handles hops==1, hops==0, unknown path)
                 uint8_t new_flags = flags | 0x50;  // Set Header2 (bit 6) + Transport (bit 4)

@@ -13,14 +13,14 @@ void LvBootScreen::createUI(lv_obj_t* parent) {
     // Title: "RATDECK"
     _lblTitle = lv_label_create(parent);
     lv_obj_set_style_text_font(_lblTitle, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(_lblTitle, lv_color_hex(Theme::PRIMARY), 0);
+    lv_obj_set_style_text_color(_lblTitle, lv_color_hex(Theme::ACCENT), 0);
     lv_label_set_text(_lblTitle, "RATDECK");
     lv_obj_align(_lblTitle, LV_ALIGN_TOP_MID, 0, 60);
 
     // Version
     _lblVersion = lv_label_create(parent);
     lv_obj_set_style_text_font(_lblVersion, &lv_font_ratdeck_12, 0);
-    lv_obj_set_style_text_color(_lblVersion, lv_color_hex(Theme::SECONDARY), 0);
+    lv_obj_set_style_text_color(_lblVersion, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     char ver[32];
     snprintf(ver, sizeof(ver), "v%s", RATDECK_VERSION_STRING);
     lv_label_set_text(_lblVersion, ver);
@@ -38,7 +38,7 @@ void LvBootScreen::createUI(lv_obj_t* parent) {
     // Status text
     _lblStatus = lv_label_create(parent);
     lv_obj_set_style_text_font(_lblStatus, &lv_font_ratdeck_12, 0);
-    lv_obj_set_style_text_color(_lblStatus, lv_color_hex(Theme::SECONDARY), 0);
+    lv_obj_set_style_text_color(_lblStatus, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     lv_label_set_text(_lblStatus, "Starting...");
     lv_obj_align(_lblStatus, LV_ALIGN_TOP_MID, 0, 128);
 }

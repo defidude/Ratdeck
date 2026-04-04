@@ -13,6 +13,7 @@ public:
     using NodeSelectedCallback = std::function<void(const std::string& peerHex)>;
 
     void createUI(lv_obj_t* parent) override;
+    void destroyUI() override;
     void refreshUI() override;
     void onEnter() override;
     bool handleKey(const KeyEvent& event) override;

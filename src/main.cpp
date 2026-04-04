@@ -169,8 +169,6 @@ static void announceWithName(bool silent = false) {
         silent ? "yes" : "no");
     rns.announce(appData);
     if (!silent) {
-        ui.statusBar().flashAnnounce();
-        ui.statusBar().showToast("Announce sent!");
         ui.lvStatusBar().flashAnnounce();
         ui.lvStatusBar().showToast("Announce sent!");
     }
@@ -221,15 +219,15 @@ void onHotkeyHelp() {
 }
 void onHotkeyMessages() {
     ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
-    ui.setLvScreen(&lvMessagesScreen);
+    ui.setScreen(&lvMessagesScreen);
 }
 void onHotkeyNewMsg() {
     ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
-    ui.setLvScreen(&lvMessagesScreen);
+    ui.setScreen(&lvMessagesScreen);
 }
 void onHotkeySettings() {
     ui.lvTabBar().setActiveTab(LvTabBar::TAB_SETTINGS);
-    ui.setLvScreen(&lvSettingsScreen);
+    ui.setScreen(&lvSettingsScreen);
 }
 void onHotkeyAnnounce() {
     announceWithName();
@@ -407,10 +405,9 @@ void setup() {
     }
 
     // Step 6: UI manager (initializes both legacy and LVGL UI layers)
-    ui.begin(&display.gfx());
+    ui.begin();
     ui.setBootMode(true);
-    ui.setLvScreen(&lvBootScreen);
-    ui.statusBar().setLoRaOnline(radioOnline);
+    ui.setScreen(&lvBootScreen);
     ui.lvStatusBar().setLoRaOnline(radioOnline);
     lvBootScreen.setProgress(0.45f, radioOnline ? "Radio online" : "Radio FAILED");
 
@@ -450,7 +447,7 @@ void setup() {
     hotkeys.setTabCycleCallback([](int dir) {
         ui.lvTabBar().cycleTab(dir);
         int tab = ui.lvTabBar().getActiveTab();
-        if (lvTabScreens[tab]) ui.setLvScreen(lvTabScreens[tab]);
+        if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
     });
     lvBootScreen.setProgress(0.58f, "Hotkeys registered");
     // (LVGL boot renders via lv_timer_handler in setProgress)
@@ -507,7 +504,6 @@ void setup() {
     lxmf.begin(&rns, &messageStore);
     lxmf.setMessageCallback([](const LXMFMessage& msg) {
         Serial.printf("[LXMF] Message from %s\n", msg.sourceHash.toHex().substr(0, 8).c_str());
-        ui.tabBar().setUnreadCount(TabBar::TAB_MSGS, lxmf.unreadCount());
         ui.lvTabBar().setUnreadCount(LvTabBar::TAB_MSGS, lxmf.unreadCount());
         audio.playMessage();
     });
@@ -606,7 +602,6 @@ void setup() {
         wifiIface.mode(RNS::Type::Interface::MODE_GATEWAY);
         RNS::Transport::register_interface(wifiIface);
         wifiImpl->start();
-        ui.statusBar().setWiFiActive(true);
         ui.lvStatusBar().setWiFiActive(true);
     } else if (wifiMode == RAT_WIFI_STA) {
         lvBootScreen.setProgress(0.87f, "WiFi STA starting...");
@@ -642,7 +637,6 @@ void setup() {
                 bleInterface.injectIncoming(pkt);
             });
 
-            ui.statusBar().setBLEActive(true);
             ui.lvStatusBar().setBLEActive(true);
             Serial.println("[BLE] Transport + Sideband ready");
         }
@@ -684,8 +678,6 @@ void setup() {
     audio.playBoot();
 
     bootComplete = true;
-    ui.statusBar().setTransportMode("RatDeck");
-    ui.lvStatusBar().setTransportMode("RatDeck");
 
     // Keep LVGL responsive during blocking radio operations (if screen is on)
     // Re-entrancy guard prevents nested lv_timer_handler() calls
@@ -717,7 +709,7 @@ void setup() {
     lvContactsScreen.setNodeSelectedCallback([](const std::string& peerHex) {
         lvMessageView.setPeerHex(peerHex);
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
-        ui.setLvScreen(&lvMessageView);
+        ui.setScreen(&lvMessageView);
     });
 
     lvNodesScreen.setAnnounceManager(announceManager);
@@ -726,7 +718,7 @@ void setup() {
     lvNodesScreen.setNodeSelectedCallback([](const std::string& peerHex) {
         lvMessageView.setPeerHex(peerHex);
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
-        ui.setLvScreen(&lvMessageView);
+        ui.setScreen(&lvMessageView);
     });
 
     lvMessagesScreen.setLXMFManager(&lxmf);
@@ -734,14 +726,14 @@ void setup() {
     lvMessagesScreen.setUIManager(&ui);
     lvMessagesScreen.setOpenCallback([](const std::string& peerHex) {
         lvMessageView.setPeerHex(peerHex);
-        ui.setLvScreen(&lvMessageView);
+        ui.setScreen(&lvMessageView);
     });
 
     lvMessageView.setLXMFManager(&lxmf);
     lvMessageView.setAnnounceManager(announceManager);
     lvMessageView.setUIManager(&ui);
     lvMessageView.setBackCallback([]() {
-        ui.setLvScreen(&lvMessagesScreen);
+        ui.setScreen(&lvMessagesScreen);
     });
 
     lvSettingsScreen.setUserConfig(&userConfig);
@@ -793,7 +785,7 @@ void setup() {
     lvTabScreens[LvTabBar::TAB_SETTINGS] = &lvSettingsScreen;
 
     ui.lvTabBar().setTabCallback([](int tab) {
-        if (lvTabScreens[tab]) ui.setLvScreen(lvTabScreens[tab]);
+        if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
     });
 
     // Data clean screen (first boot only — when SD has old data)
@@ -809,7 +801,7 @@ void setup() {
             ESP.restart();
         } else {
             Serial.println("[BOOT] User chose to keep old data");
-            ui.setLvScreen(&lvNameInputScreen);
+            ui.setScreen(&lvNameInputScreen);
         }
     });
 
@@ -817,7 +809,7 @@ void setup() {
     // Transition to home screen (shared by name input, timezone, and normal boot)
     auto goHome = []() {
         ui.setBootMode(false);
-        ui.setLvScreen(&lvHomeScreen);
+        ui.setScreen(&lvHomeScreen);
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_HOME);
         announceWithName();
         lastAutoAnnounce = millis();
@@ -828,7 +820,7 @@ void setup() {
     auto showTimezone = [goHome]() {
         if (!userConfig.settings().timezoneSet) {
             lvTimezoneScreen.setSelectedIndex(userConfig.settings().timezoneIdx);
-            ui.setLvScreen(&lvTimezoneScreen);
+            ui.setScreen(&lvTimezoneScreen);
             Serial.println("[BOOT] Showing timezone selection");
         } else {
             goHome();
@@ -885,12 +877,12 @@ void setup() {
 
     if (userConfig.settings().displayName.isEmpty()) {
         // First boot — go to name input
-        ui.setLvScreen(&lvNameInputScreen);
+        ui.setScreen(&lvNameInputScreen);
         Serial.println("[BOOT] Showing name input screen");
     } else if (!userConfig.settings().timezoneSet) {
         // Name set but timezone not — show timezone picker
         lvTimezoneScreen.setSelectedIndex(userConfig.settings().timezoneIdx);
-        ui.setLvScreen(&lvTimezoneScreen);
+        ui.setScreen(&lvTimezoneScreen);
         Serial.println("[BOOT] Showing timezone selection (name already set)");
     } else {
         // Everything configured — go straight to home
@@ -941,11 +933,11 @@ void loop() {
         }
         // Ctrl+hotkeys first
         else if (!hotkeys.process(evt)) {
-            // Feed key to LVGL input system
-            LvInput::feedKey(evt);
-
-            // Screen gets the key next
+            // Screen gets the key first
             bool consumed = ui.handleKey(evt);
+
+            // Feed to LVGL input system only if the screen didn't consume it
+            if (!consumed) LvInput::feedKey(evt);
 
             // Tab cycling: ,=left /=right OR trackball left/right (only if screen didn't consume)
             if (!consumed && !evt.ctrl) {
@@ -954,12 +946,12 @@ void loop() {
                 if (tabLeft) {
                     ui.lvTabBar().cycleTab(-1);
                     int tab = ui.lvTabBar().getActiveTab();
-                    if (lvTabScreens[tab]) ui.setLvScreen(lvTabScreens[tab]);
+                    if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
                 }
                 if (tabRight) {
                     ui.lvTabBar().cycleTab(1);
                     int tab = ui.lvTabBar().getActiveTab();
-                    if (lvTabScreens[tab]) ui.setLvScreen(lvTabScreens[tab]);
+                    if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
                 }
             }
         }
@@ -1014,7 +1006,6 @@ void loop() {
         bool connected = (WiFi.status() == WL_CONNECTED);
         if (connected && !wifiSTAConnected) {
             wifiSTAConnected = true;
-            ui.statusBar().setWiFiActive(true);
             ui.lvStatusBar().setWiFiActive(true);
             Serial.printf("[WIFI] STA connected: %s\n", WiFi.localIP().toString().c_str());
 
@@ -1032,7 +1023,6 @@ void loop() {
             wifiConnectedAt = millis();
         } else if (!connected && wifiSTAConnected) {
             wifiSTAConnected = false;
-            ui.statusBar().setWiFiActive(false);
             ui.lvStatusBar().setWiFiActive(false);
             ui.lvStatusBar().setTCPConnected(false);
             // Stop and deregister TCP clients cleanly
@@ -1095,7 +1085,6 @@ void loop() {
     if (millis() - lastStatusUpdate >= STATUS_UPDATE_MS) {
         lastStatusUpdate = millis();
         if (powerMgr.isScreenOn()) {
-            ui.statusBar().setBatteryPercent(powerMgr.batteryPercent());
             ui.lvStatusBar().setBatteryPercent(powerMgr.batteryPercent());
             // Update TCP connection indicator
             bool anyTcpUp = false;
@@ -1115,10 +1104,7 @@ void loop() {
         }
     }
 
-    // 12. Render any dirty regions
-    if (powerMgr.isScreenOn()) {
-        ui.render();
-    }
+
 
     // 12.5. RSSI monitor (non-blocking, one sample per loop iteration)
     if (rssiMonitorActive && radioOnline) {

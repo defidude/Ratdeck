@@ -10,7 +10,7 @@ void LvStatusBar::create(lv_obj_t* parent) {
     lv_obj_align(_bar, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_bg_color(_bar, lv_color_hex(Theme::BG), 0);
     lv_obj_set_style_bg_opa(_bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(_bar, lv_color_hex(Theme::BORDER), 0);
+    lv_obj_set_style_border_color(_bar, lv_color_hex(Theme::DIVIDER), 0);
     lv_obj_set_style_border_width(_bar, 1, 0);
     lv_obj_set_style_border_side(_bar, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_pad_all(_bar, 0, 0);
@@ -19,14 +19,14 @@ void LvStatusBar::create(lv_obj_t* parent) {
 
     const lv_font_t* font = &lv_font_ratdeck_12;
 
-    // Left: Time display (hidden until valid time is available)
+    // Left: Time display (hidden until valid time)
     _lblTime = lv_label_create(_bar);
     lv_obj_set_style_text_font(_lblTime, font, 0);
-    lv_obj_set_style_text_color(_lblTime, lv_color_hex(Theme::PRIMARY), 0);
+    lv_obj_set_style_text_color(_lblTime, lv_color_hex(Theme::TEXT_PRIMARY), 0);
     lv_label_set_text(_lblTime, "");
     lv_obj_align(_lblTime, LV_ALIGN_LEFT_MID, 4, 0);
 
-    // Center: "Ratspeak.org"
+    // Center: Brand
     _lblBrand = lv_label_create(_bar);
     lv_obj_set_style_text_font(_lblBrand, font, 0);
     lv_obj_set_style_text_color(_lblBrand, lv_color_hex(Theme::ACCENT), 0);
@@ -35,7 +35,7 @@ void LvStatusBar::create(lv_obj_t* parent) {
 
     // Right: Battery %
     _lblBatt = lv_label_create(_bar);
-    lv_obj_set_style_text_font(_lblBatt, font, 0);
+    lv_obj_set_style_text_font(_lblBatt, &lv_font_ratdeck_10, 0);
     lv_label_set_text(_lblBatt, "");
     lv_obj_align(_lblBatt, LV_ALIGN_RIGHT_MID, -4, 0);
 
@@ -43,7 +43,7 @@ void LvStatusBar::create(lv_obj_t* parent) {
     _toast = lv_obj_create(parent);
     lv_obj_set_size(_toast, Theme::SCREEN_W, Theme::STATUS_BAR_H);
     lv_obj_align(_toast, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_set_style_bg_color(_toast, lv_color_hex(Theme::ACCENT), 0);
+    lv_obj_set_style_bg_color(_toast, lv_color_hex(Theme::PRIMARY), 0);
     lv_obj_set_style_bg_opa(_toast, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(_toast, 0, 0);
     lv_obj_set_style_radius(_toast, 0, 0);
@@ -58,12 +58,9 @@ void LvStatusBar::create(lv_obj_t* parent) {
 }
 
 void LvStatusBar::update() {
-    // Handle announce flash timeout
     if (_announceFlashEnd > 0 && millis() >= _announceFlashEnd) {
         _announceFlashEnd = 0;
     }
-
-    // Handle toast timeout
     if (_toastEnd > 0 && millis() >= _toastEnd) {
         _toastEnd = 0;
         lv_obj_add_flag(_toast, LV_OBJ_FLAG_HIDDEN);
@@ -72,26 +69,21 @@ void LvStatusBar::update() {
 
 void LvStatusBar::updateTime() {
     if (!_lblTime) return;
-
     time_t now = time(nullptr);
     if (now <= 1700000000) {
         lv_label_set_text(_lblTime, "");
         _lastHour = -1; _lastMinute = -1;
         return;
     }
-
     struct tm* local = localtime(&now);
     if (!local) {
         lv_label_set_text(_lblTime, "");
         _lastHour = -1; _lastMinute = -1;
         return;
     }
-
-    // Only update label when minute changes (avoids needless LVGL invalidation)
     if (local->tm_hour == _lastHour && local->tm_min == _lastMinute) return;
     _lastHour = local->tm_hour;
     _lastMinute = local->tm_min;
-
     char buf[8];
     if (_use24h) {
         snprintf(buf, sizeof(buf), "%02d:%02d", local->tm_hour, local->tm_min);
@@ -103,9 +95,7 @@ void LvStatusBar::updateTime() {
     lv_label_set_text(_lblTime, buf);
 }
 
-void LvStatusBar::setGPSFix(bool hasFix) {
-    _gpsFix = hasFix;
-}
+void LvStatusBar::setGPSFix(bool hasFix) { _gpsFix = hasFix; }
 
 void LvStatusBar::setBatteryPercent(int pct) {
     if (_battPct == pct) return;
@@ -114,20 +104,14 @@ void LvStatusBar::setBatteryPercent(int pct) {
         char buf[8];
         snprintf(buf, sizeof(buf), "%d%%", pct);
         lv_label_set_text(_lblBatt, buf);
-        uint32_t col = Theme::PRIMARY;
+        uint32_t col = Theme::TEXT_PRIMARY;
         if (pct <= 15) col = Theme::ERROR_CLR;
         else if (pct <= 30) col = Theme::WARNING_CLR;
         lv_obj_set_style_text_color(_lblBatt, lv_color_hex(col), 0);
     }
 }
 
-void LvStatusBar::setTransportMode(const char* mode) {
-    (void)mode;
-}
-
-void LvStatusBar::flashAnnounce() {
-    _announceFlashEnd = millis() + 1000;
-}
+void LvStatusBar::flashAnnounce() { _announceFlashEnd = millis() + 1000; }
 
 void LvStatusBar::showToast(const char* msg, uint32_t durationMs) {
     lv_label_set_text(_lblToast, msg);

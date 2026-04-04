@@ -734,7 +734,7 @@ void LvSettingsScreen::rebuildCategoryList() {
         bool selected = (i == _categoryIdx);
 
         lv_obj_t* row = lv_obj_create(_scrollContainer);
-        lv_obj_set_size(row, Theme::CONTENT_W, 34);
+        lv_obj_set_size(row, Theme::CONTENT_W, 38);
         lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
         lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
         lv_obj_set_style_pad_all(row, 0, 0);
@@ -757,7 +757,7 @@ void LvSettingsScreen::rebuildCategoryList() {
         snprintf(buf, sizeof(buf), "%s (%d)", cat.name, cat.count);
         lv_obj_t* nameLbl = lv_label_create(row);
         lv_obj_set_style_text_font(nameLbl, font, 0);
-        lv_obj_set_style_text_color(nameLbl, lv_color_hex(selected ? Theme::ACCENT : Theme::PRIMARY), 0);
+        lv_obj_set_style_text_color(nameLbl, lv_color_hex(Theme::TEXT_PRIMARY), 0);
         lv_label_set_text(nameLbl, buf);
         lv_obj_align(nameLbl, LV_ALIGN_TOP_LEFT, 12, 4);
 
@@ -765,15 +765,15 @@ void LvSettingsScreen::rebuildCategoryList() {
         if (cat.summary) {
             lv_obj_t* sumLbl = lv_label_create(row);
             lv_obj_set_style_text_font(sumLbl, &lv_font_ratdeck_10, 0);
-            lv_obj_set_style_text_color(sumLbl, lv_color_hex(Theme::MUTED), 0);
+            lv_obj_set_style_text_color(sumLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
             lv_label_set_text(sumLbl, cat.summary().c_str());
-            lv_obj_align(sumLbl, LV_ALIGN_BOTTOM_LEFT, 20, -2);
+            lv_obj_align(sumLbl, LV_ALIGN_BOTTOM_LEFT, 20, -4);
         }
 
         // Arrow
         lv_obj_t* arrow = lv_label_create(row);
         lv_obj_set_style_text_font(arrow, font, 0);
-        lv_obj_set_style_text_color(arrow, lv_color_hex(selected ? Theme::ACCENT : Theme::MUTED), 0);
+        lv_obj_set_style_text_color(arrow, lv_color_hex(selected ? Theme::ACCENT : Theme::TEXT_MUTED), 0);
         lv_label_set_text(arrow, ">");
         lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, -8, 0);
 
@@ -789,6 +789,7 @@ void LvSettingsScreen::rebuildCategoryList() {
 void LvSettingsScreen::rebuildItemList() {
     if (!_scrollContainer) return;
     _rowObjs.clear();
+    _editValueLbl = nullptr;  // Invalidate cached label before destroying widgets
     lv_obj_clean(_scrollContainer);
 
     const lv_font_t* font = &lv_font_ratdeck_12;
@@ -823,7 +824,7 @@ void LvSettingsScreen::rebuildItemList() {
         bool editable = isEditable(i);
 
         lv_obj_t* row = lv_obj_create(_scrollContainer);
-        lv_obj_set_size(row, Theme::CONTENT_W, 22);
+        lv_obj_set_size(row, Theme::CONTENT_W, 26);
         lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
         if (editable) {
             lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
@@ -857,7 +858,8 @@ void LvSettingsScreen::rebuildItemList() {
         lv_obj_t* nameLbl = lv_label_create(row);
         lv_obj_set_style_text_font(nameLbl, font, 0);
         lv_obj_set_style_text_color(nameLbl, lv_color_hex(
-            item.type == SettingType::ACTION ? (selected ? Theme::ACCENT : Theme::PRIMARY) : Theme::SECONDARY), 0);
+            item.type == SettingType::ACTION ? Theme::TEXT_PRIMARY :
+            item.type == SettingType::READONLY ? Theme::TEXT_MUTED : Theme::TEXT_SECONDARY), 0);
         lv_label_set_text(nameLbl, item.label);
         lv_obj_align(nameLbl, LV_ALIGN_LEFT_MID, 4, 0);
 
@@ -885,12 +887,12 @@ void LvSettingsScreen::rebuildItemList() {
             switch (item.type) {
                 case SettingType::READONLY:
                     valStr = item.formatter ? item.formatter(0) : "";
-                    valColor = Theme::MUTED;
+                    valColor = Theme::TEXT_MUTED;
                     break;
                 case SettingType::TEXT_INPUT: {
                     String v = item.textGetter ? item.textGetter() : "";
                     valStr = v.isEmpty() ? "(not set)" : v;
-                    valColor = v.isEmpty() ? Theme::MUTED : Theme::PRIMARY;
+                    valColor = v.isEmpty() ? Theme::TEXT_MUTED : Theme::PRIMARY;
                     break;
                 }
                 case SettingType::ENUM_CHOICE:
@@ -901,7 +903,7 @@ void LvSettingsScreen::rebuildItemList() {
                     break;
                 case SettingType::ACTION:
                     valStr = item.formatter ? item.formatter(0) : "";
-                    valColor = Theme::MUTED;
+                    valColor = Theme::TEXT_MUTED;
                     break;
                 default: {
                     int v = item.getter ? item.getter() : 0;
@@ -917,6 +919,10 @@ void LvSettingsScreen::rebuildItemList() {
             lv_obj_set_style_text_color(valLbl, lv_color_hex(valColor), 0);
             lv_label_set_text(valLbl, valStr.c_str());
             lv_obj_align(valLbl, LV_ALIGN_RIGHT_MID, -4, 0);
+            // Cache value label for the actively edited item (in-place updates)
+            if (i == _selectedIdx && (_textEditing || _freqEditing || _editing)) {
+                _editValueLbl = valLbl;
+            }
         }
 
         _rowObjs.push_back(row);
@@ -955,7 +961,7 @@ void LvSettingsScreen::rebuildWifiList() {
     if (_wifiResults.empty()) {
         lv_obj_t* emptyLbl = lv_label_create(_scrollContainer);
         lv_obj_set_style_text_font(emptyLbl, font, 0);
-        lv_obj_set_style_text_color(emptyLbl, lv_color_hex(Theme::MUTED), 0);
+        lv_obj_set_style_text_color(emptyLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
         lv_label_set_text(emptyLbl, "No networks found");
         return;
     }
@@ -1010,7 +1016,7 @@ void LvSettingsScreen::rebuildWifiList() {
         snprintf(sigBuf, sizeof(sigBuf), "%ddBm", net.rssi);
         lv_obj_t* sigLbl = lv_label_create(row);
         lv_obj_set_style_text_font(sigLbl, &lv_font_ratdeck_10, 0);
-        lv_obj_set_style_text_color(sigLbl, lv_color_hex(Theme::MUTED), 0);
+        lv_obj_set_style_text_color(sigLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
         lv_label_set_text(sigLbl, sigBuf);
         lv_obj_align(sigLbl, LV_ALIGN_RIGHT_MID, -4, 0);
 
@@ -1019,20 +1025,19 @@ void LvSettingsScreen::rebuildWifiList() {
 }
 
 void LvSettingsScreen::updateCategorySelection(int oldIdx, int newIdx) {
-    // _rowObjs maps directly to category indices (title row is NOT in _rowObjs)
     if (oldIdx >= 0 && oldIdx < (int)_rowObjs.size()) {
         lv_obj_set_style_bg_color(_rowObjs[oldIdx], lv_color_hex(Theme::BG), 0);
         lv_obj_t* nameLbl = lv_obj_get_child(_rowObjs[oldIdx], 0);
-        if (nameLbl) lv_obj_set_style_text_color(nameLbl, lv_color_hex(Theme::PRIMARY), 0);
+        if (nameLbl) lv_obj_set_style_text_color(nameLbl, lv_color_hex(Theme::TEXT_PRIMARY), 0);
         lv_obj_t* arrow = lv_obj_get_child(_rowObjs[oldIdx], -1);
-        if (arrow) lv_obj_set_style_text_color(arrow, lv_color_hex(Theme::MUTED), 0);
+        if (arrow) lv_obj_set_style_text_color(arrow, lv_color_hex(Theme::TEXT_MUTED), 0);
     }
     if (newIdx >= 0 && newIdx < (int)_rowObjs.size()) {
-        lv_obj_set_style_bg_color(_rowObjs[newIdx], lv_color_hex(Theme::SELECTION_BG), 0);
+        lv_obj_set_style_bg_color(_rowObjs[newIdx], lv_color_hex(Theme::BG_HOVER), 0);
         lv_obj_t* nameLbl = lv_obj_get_child(_rowObjs[newIdx], 0);
-        if (nameLbl) lv_obj_set_style_text_color(nameLbl, lv_color_hex(Theme::ACCENT), 0);
+        if (nameLbl) lv_obj_set_style_text_color(nameLbl, lv_color_hex(Theme::TEXT_PRIMARY), 0);
         lv_obj_t* arrow = lv_obj_get_child(_rowObjs[newIdx], -1);
-        if (arrow) lv_obj_set_style_text_color(arrow, lv_color_hex(Theme::ACCENT), 0);
+        if (arrow) lv_obj_set_style_text_color(arrow, lv_color_hex(Theme::PRIMARY), 0);
         lv_obj_scroll_to_view(_rowObjs[newIdx], LV_ANIM_OFF);
     }
 }
@@ -1045,7 +1050,7 @@ void LvSettingsScreen::updateItemSelection(int oldIdx, int newIdx) {
         if (row < 0 || row >= (int)_rowObjs.size()) return;
         bool editable = isEditable(row + _catRangeStart);
         lv_obj_set_style_bg_color(_rowObjs[row], lv_color_hex(
-            (selected && editable) ? Theme::SELECTION_BG : Theme::BG), 0);
+            (selected && editable) ? Theme::BG_HOVER : Theme::BG), 0);
     };
     setItemRowBg(oldRow, false);
     setItemRowBg(newRow, true);
@@ -1055,16 +1060,15 @@ void LvSettingsScreen::updateItemSelection(int oldIdx, int newIdx) {
 }
 
 void LvSettingsScreen::updateWifiSelection(int oldIdx, int newIdx) {
-    // _rowObjs maps directly to wifi items (header row is NOT in _rowObjs)
     if (oldIdx >= 0 && oldIdx < (int)_rowObjs.size()) {
         lv_obj_set_style_bg_color(_rowObjs[oldIdx], lv_color_hex(Theme::BG), 0);
         lv_obj_t* lbl = lv_obj_get_child(_rowObjs[oldIdx], 0);
-        if (lbl) lv_obj_set_style_text_color(lbl, lv_color_hex(Theme::PRIMARY), 0);
+        if (lbl) lv_obj_set_style_text_color(lbl, lv_color_hex(Theme::TEXT_PRIMARY), 0);
     }
     if (newIdx >= 0 && newIdx < (int)_rowObjs.size()) {
-        lv_obj_set_style_bg_color(_rowObjs[newIdx], lv_color_hex(Theme::SELECTION_BG), 0);
+        lv_obj_set_style_bg_color(_rowObjs[newIdx], lv_color_hex(Theme::BG_HOVER), 0);
         lv_obj_t* lbl = lv_obj_get_child(_rowObjs[newIdx], 0);
-        if (lbl) lv_obj_set_style_text_color(lbl, lv_color_hex(Theme::ACCENT), 0);
+        if (lbl) lv_obj_set_style_text_color(lbl, lv_color_hex(Theme::TEXT_PRIMARY), 0);
         lv_obj_scroll_to_view(_rowObjs[newIdx], LV_ANIM_OFF);
     }
 }
@@ -1109,60 +1113,77 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
         case SettingsView::ITEM_LIST: {
             if (_items.empty()) return false;
 
-            // Text edit mode
+            // Text edit mode — in-place label updates for responsiveness
             if (_textEditing) {
                 auto& item = _items[_selectedIdx];
+                auto updateEditLabel = [this]() {
+                    if (_editValueLbl) {
+                        String display = _editText + "_";
+                        lv_label_set_text(_editValueLbl, display.c_str());
+                        lv_obj_align(_editValueLbl, LV_ALIGN_RIGHT_MID, -4, 0);
+                    }
+                };
                 if (event.enter || event.character == '\n' || event.character == '\r') {
                     if (item.textSetter) item.textSetter(_editText);
                     _textEditing = false;
+                    _editValueLbl = nullptr;
                     applyAndSave();
                     rebuildItemList();
                     return true;
                 }
                 if (event.del || event.character == 8) {
-                    if (_editText.length() > 0) { _editText.remove(_editText.length() - 1); rebuildItemList(); }
+                    if (_editText.length() > 0) { _editText.remove(_editText.length() - 1); updateEditLabel(); }
                     return true;
                 }
-                if (event.character == 0x1B) { _textEditing = false; rebuildItemList(); return true; }
+                if (event.character == 0x1B) { _textEditing = false; _editValueLbl = nullptr; rebuildItemList(); return true; }
                 if (event.character >= 0x20 && event.character <= 0x7E && (int)_editText.length() < item.maxTextLen) {
-                    _editText += (char)event.character; rebuildItemList(); return true;
+                    _editText += (char)event.character; updateEditLabel(); return true;
                 }
                 return true;
             }
 
-            // Frequency digit-cursor edit mode
+            // Frequency digit-cursor edit mode — in-place label updates
             if (_freqEditing) {
+                auto updateFreqLabel = [this]() {
+                    if (_editValueLbl) {
+                        String display = String("< ") + freqFormatWithCursor() + " >";
+                        lv_label_set_text(_editValueLbl, display.c_str());
+                        lv_obj_align(_editValueLbl, LV_ALIGN_RIGHT_MID, -4, 0);
+                    }
+                };
                 if (event.left) {
                     if (_freqCursor > 0) _freqCursor--;
-                    rebuildItemList(); return true;
+                    updateFreqLabel(); return true;
                 }
                 if (event.right) {
                     if (_freqCursor < 8) _freqCursor++;
-                    rebuildItemList(); return true;
+                    updateFreqLabel(); return true;
                 }
                 if (event.character >= '0' && event.character <= '9') {
                     _freqDigits[_freqCursor] = event.character - '0';
                     _editValue = freqRecompose();
                     if (_freqCursor < 8) _freqCursor++;
-                    rebuildItemList(); return true;
+                    updateFreqLabel(); return true;
                 }
                 if (event.enter || event.character == '\n' || event.character == '\r') {
                     auto& item = _items[_selectedIdx];
                     _editValue = freqRecompose();
                     if (item.setter) item.setter(_editValue);
                     _freqEditing = false; _editing = false;
+                    _editValueLbl = nullptr;
                     applyAndSave(); rebuildItemList(); return true;
                 }
                 if (event.del || event.character == 8) {
                     if (_freqCursor > 0) _freqCursor--;
-                    rebuildItemList(); return true;
+                    updateFreqLabel(); return true;
                 }
                 if (event.character == 0x1B) {
                     _editValue = _freqOriginal;
                     _freqEditing = false; _editing = false;
+                    _editValueLbl = nullptr;
                     rebuildItemList(); return true;
                 }
-                return true;  // Consume all keys in freq mode
+                return true;
             }
 
             // Value edit mode

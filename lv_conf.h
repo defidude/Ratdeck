@@ -36,9 +36,10 @@ extern const lv_font_t lv_font_ratdeck_14;
 #define LV_LOG_LEVEL LV_LOG_LEVEL_WARN
 #define LV_LOG_PRINTF 1
 
-// Theme
-#define LV_USE_THEME_DEFAULT 1
-#define LV_THEME_DEFAULT_DARK 1
+// Theme — disabled; we use our own LvTheme system which handles all styling.
+// The default theme's blue focus outline conflicts with our green design.
+#define LV_USE_THEME_DEFAULT 0
+#define LV_THEME_DEFAULT_DARK 0
 
 // Fonts - built-in (only 16 still used for titles; 10/12/14 replaced by custom ratdeck fonts)
 #define LV_FONT_MONTSERRAT_10 0
@@ -48,27 +49,27 @@ extern const lv_font_t lv_font_ratdeck_14;
 #define LV_FONT_UNSCII_8      0
 #define LV_FONT_DEFAULT        &lv_font_ratdeck_14
 
-// Widgets
+// Widgets — only enable what we actually use
 #define LV_USE_LABEL      1
 #define LV_USE_BTN        1
-#define LV_USE_BTNMATRIX  1
+#define LV_USE_BTNMATRIX  1  // Required by LVGL calendar/msgbox internals
 #define LV_USE_TEXTAREA   1
-#define LV_USE_LIST       1
-#define LV_USE_MENU       1
+#define LV_USE_LIST       0
+#define LV_USE_MENU       0
 #define LV_USE_BAR        1
-#define LV_USE_SLIDER     1
-#define LV_USE_SWITCH     1
-#define LV_USE_DROPDOWN   1
+#define LV_USE_SLIDER     0
+#define LV_USE_SWITCH     0
+#define LV_USE_DROPDOWN   1  // Required by LVGL calendar internals
 #define LV_USE_ROLLER     1
-#define LV_USE_TABLE      1
-#define LV_USE_TABVIEW    1
-#define LV_USE_IMG        1
-#define LV_USE_LINE       1
-#define LV_USE_ARC        1
-#define LV_USE_SPINNER    1
-#define LV_USE_MSGBOX     1
-#define LV_USE_KEYBOARD   1
-#define LV_USE_CHECKBOX   1
+#define LV_USE_TABLE      0
+#define LV_USE_TABVIEW    0
+#define LV_USE_IMG        0
+#define LV_USE_LINE       0
+#define LV_USE_ARC        0
+#define LV_USE_SPINNER    0
+#define LV_USE_MSGBOX     0
+#define LV_USE_KEYBOARD   0
+#define LV_USE_CHECKBOX   0
 #define LV_USE_CANVAS     0
 
 // Layouts

@@ -45,4 +45,5 @@ private:
     lv_obj_t* _lblId = nullptr;
     lv_obj_t* _lblStatus = nullptr;
     lv_obj_t* _lblNodes = nullptr;
+    lv_obj_t* _btnAnnounce = nullptr;
 };

@@ -26,14 +26,14 @@ void LvDataCleanScreen::createUI(lv_obj_t* parent) {
     // Message
     lv_obj_t* msg = lv_label_create(parent);
     lv_obj_set_style_text_font(msg, &lv_font_ratdeck_12, 0);
-    lv_obj_set_style_text_color(msg, lv_color_hex(Theme::SECONDARY), 0);
+    lv_obj_set_style_text_color(msg, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     lv_label_set_text(msg, "Old data found on SD card.");
     lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 75);
 
     // Prompt
     lv_obj_t* prompt = lv_label_create(parent);
     lv_obj_set_style_text_font(prompt, &lv_font_ratdeck_12, 0);
-    lv_obj_set_style_text_color(prompt, lv_color_hex(Theme::SECONDARY), 0);
+    lv_obj_set_style_text_color(prompt, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     lv_label_set_text(prompt, "Remove old data and start fresh?");
     lv_obj_align(prompt, LV_ALIGN_TOP_MID, 0, 95);
 
@@ -69,7 +69,7 @@ void LvDataCleanScreen::createUI(lv_obj_t* parent) {
     // Version
     lv_obj_t* ver = lv_label_create(parent);
     lv_obj_set_style_text_font(ver, &lv_font_ratdeck_10, 0);
-    lv_obj_set_style_text_color(ver, lv_color_hex(Theme::MUTED), 0);
+    lv_obj_set_style_text_color(ver, lv_color_hex(Theme::TEXT_MUTED), 0);
     char verBuf[32];
     snprintf(verBuf, sizeof(verBuf), "v%s", RATDECK_VERSION_STRING);
     lv_label_set_text(ver, verBuf);
@@ -79,9 +79,9 @@ void LvDataCleanScreen::createUI(lv_obj_t* parent) {
 void LvDataCleanScreen::updateSelection() {
     if (_selectedYes) {
         lv_obj_set_style_text_color(_yesLabel, lv_color_hex(Theme::ACCENT), 0);
-        lv_obj_set_style_text_color(_noLabel, lv_color_hex(Theme::MUTED), 0);
+        lv_obj_set_style_text_color(_noLabel, lv_color_hex(Theme::TEXT_MUTED), 0);
     } else {
-        lv_obj_set_style_text_color(_yesLabel, lv_color_hex(Theme::MUTED), 0);
+        lv_obj_set_style_text_color(_yesLabel, lv_color_hex(Theme::TEXT_MUTED), 0);
         lv_obj_set_style_text_color(_noLabel, lv_color_hex(Theme::ACCENT), 0);
     }
 }

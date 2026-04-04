@@ -8,7 +8,7 @@ public:
     void create(lv_obj_t* parent);
     void update();
 
-    // Status setters (kept for API compatibility, no bars drawn)
+    // Status setters
     void setLoRaOnline(bool online) { _loraOnline = online; }
     void setBLEActive(bool active) { _bleActive = active; }
     void setBLEEnabled(bool enabled) { _bleEnabled = enabled; }
@@ -17,7 +17,6 @@ public:
     void setTCPConnected(bool connected) { _tcpConnected = connected; }
     void setGPSFix(bool hasFix);
     void setBatteryPercent(int pct);
-    void setTransportMode(const char* mode);
     void flashAnnounce();
     void showToast(const char* msg, uint32_t durationMs = 1500);
 
@@ -29,11 +28,12 @@ public:
 
 private:
     lv_obj_t* _bar = nullptr;
-    lv_obj_t* _lblTime = nullptr;    // Top-left: current time
-    lv_obj_t* _lblBrand = nullptr;   // Center: "Ratspeak.org"
-    lv_obj_t* _lblBatt = nullptr;    // Right: battery %
+    lv_obj_t* _lblTime = nullptr;       // Left: current time
+    lv_obj_t* _lblBrand = nullptr;      // Center: "Ratspeak.org"
+    lv_obj_t* _lblBatt = nullptr;       // Right: battery %
     lv_obj_t* _toast = nullptr;
     lv_obj_t* _lblToast = nullptr;
+
 
     bool _loraOnline = false;
     bool _bleActive = false;

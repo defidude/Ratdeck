@@ -1,10 +1,12 @@
 #include "LvInput.h"
+#include "Theme.h"
 #include "hal/Keyboard.h"
 #include "hal/Trackball.h"
 #include "hal/TouchInput.h"
 
 namespace LvInput {
 
+#if 0 // Dead code: bitmap cursor icon — replaced by LVGL shape cursor in init()
 const uint8_t mouse_cursor_icon_map[] = {
 #if LV_COLOR_DEPTH == 1 || LV_COLOR_DEPTH == 8
     /*Pixel format: Alpha 8 bit, Red: 3 bit, Green: 3 bit, Blue: 2 bit*/
@@ -109,6 +111,7 @@ static lv_img_dsc_t mouse_cursor_icon = {
     .data_size = 280 * LV_IMG_PX_SIZE_ALPHA_BYTE,
     .data = mouse_cursor_icon_map,
 };
+#endif // Dead cursor icon
 
 static Keyboard* s_kb = nullptr;
 static Trackball* s_tb = nullptr;
@@ -189,17 +192,20 @@ void init(Keyboard* kb, Trackball* tb, TouchInput* touch) {
     lv_indev_t* touchIndev = lv_indev_drv_register(&touchDrv);
     lv_indev_set_group(touchIndev, s_group);
 
-    // Touch cursor: black center with thin green ring (on-brand, minimal)
+    // Touch cursor: semi-transparent center with brand orange ring
     s_cursor = lv_obj_create(lv_layer_sys());
-    lv_obj_set_size(s_cursor, 12, 12);
-    lv_obj_set_style_radius(s_cursor, 6, 0);
-    lv_obj_set_style_bg_color(s_cursor, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(s_cursor, LV_OPA_COVER, 0);
-    lv_obj_set_style_outline_color(s_cursor, lv_color_hex(0x00FF41), 0);
+    lv_obj_set_size(s_cursor, 14, 14);
+    lv_obj_set_style_radius(s_cursor, 7, 0);
+    lv_obj_set_style_bg_color(s_cursor, lv_color_hex(Theme::BG), 0);
+    lv_obj_set_style_bg_opa(s_cursor, LV_OPA_60, 0);
+    lv_obj_set_style_outline_color(s_cursor, lv_color_hex(Theme::PRIMARY), 0);
     lv_obj_set_style_outline_width(s_cursor, 1, 0);
     lv_obj_set_style_outline_opa(s_cursor, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_cursor, 0, 0);
     lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    // Center the cursor on the touch point (LVGL positions top-left by default)
+    lv_obj_set_style_translate_x(s_cursor, -7, 0);
+    lv_obj_set_style_translate_y(s_cursor, -7, 0);
     lv_indev_set_cursor(touchIndev, s_cursor);
     lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
 

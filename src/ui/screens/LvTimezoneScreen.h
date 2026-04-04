@@ -51,15 +51,10 @@ public:
     void setSelectedIndex(int idx) { _selectedIdx = idx; }
 
 private:
-    void updateSelection(int oldIdx, int newIdx);
-
     std::function<void(int)> _doneCb;
     int _selectedIdx = 6;  // Default: New York (EST/EDT)
     unsigned long _enterTime = 0;
     static constexpr unsigned long ENTER_GUARD_MS = 600;
 
-    // LVGL widgets
-    lv_obj_t* _scrollContainer = nullptr;
-    static constexpr int VISIBLE_ROWS = 5;
-    static constexpr int ROW_H = 28;
+    lv_obj_t* _roller = nullptr;
 };

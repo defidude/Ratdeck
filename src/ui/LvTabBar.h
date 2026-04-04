@@ -29,5 +29,5 @@ private:
     int _unread[TAB_COUNT] = {};
     TabCallback _tabCb = nullptr;
 
-    static constexpr const char* TAB_NAMES[TAB_COUNT] = {"Home", "Friends", "Msgs", "Peers", "Setup"};
+    static constexpr const char* TAB_NAMES[TAB_COUNT] = {"Home", "Friends", "Msgs", "Peers", "Settings"};
 };

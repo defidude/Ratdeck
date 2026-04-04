@@ -14,7 +14,7 @@ void LvContactsScreen::createUI(lv_obj_t* parent) {
 
     _lblEmpty = lv_label_create(parent);
     lv_obj_set_style_text_font(_lblEmpty, &lv_font_ratdeck_14, 0);
-    lv_obj_set_style_text_color(_lblEmpty, lv_color_hex(Theme::MUTED), 0);
+    lv_obj_set_style_text_color(_lblEmpty, lv_color_hex(Theme::TEXT_MUTED), 0);
     lv_label_set_text(_lblEmpty, "No saved contacts");
     lv_obj_center(_lblEmpty);
 
@@ -93,11 +93,20 @@ void LvContactsScreen::rebuildList() {
             lv_obj_scroll_to_view(lv_event_get_target(e), LV_ANIM_ON);
         }, LV_EVENT_FOCUSED, nullptr);
 
+        // Contact name
         lv_obj_t* lbl = lv_label_create(row);
         lv_obj_set_style_text_font(lbl, &lv_font_ratdeck_14, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(Theme::ACCENT), 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(Theme::PRIMARY), 0);
         lv_label_set_text(lbl, node.name.c_str());
         lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 8, 0);
+
+        // Hash suffix (right side, muted)
+        lv_obj_t* lblHash = lv_label_create(row);
+        lv_obj_set_style_text_font(lblHash, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(lblHash, lv_color_hex(Theme::TEXT_MUTED), 0);
+        std::string shortHash = node.hash.toHex().substr(0, 8);
+        lv_label_set_text(lblHash, shortHash.c_str());
+        lv_obj_align(lblHash, LV_ALIGN_RIGHT_MID, -8, 0);
     }
 }
 

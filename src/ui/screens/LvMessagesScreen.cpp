@@ -18,7 +18,7 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
 
     _lblEmpty = lv_label_create(parent);
     lv_obj_set_style_text_font(_lblEmpty, &lv_font_ratdeck_14, 0);
-    lv_obj_set_style_text_color(_lblEmpty, lv_color_hex(Theme::MUTED), 0);
+    lv_obj_set_style_text_color(_lblEmpty, lv_color_hex(Theme::TEXT_MUTED), 0);
     lv_label_set_text(_lblEmpty, "No conversations");
     lv_obj_center(_lblEmpty);
 
@@ -151,7 +151,7 @@ void LvMessagesScreen::rebuildList() {
                 snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", tm->tm_hour, tm->tm_min);
                 lv_obj_t* timeLbl = lv_label_create(row);
                 lv_obj_set_style_text_font(timeLbl, &lv_font_ratdeck_10, 0);
-                lv_obj_set_style_text_color(timeLbl, lv_color_hex(Theme::MUTED), 0);
+                lv_obj_set_style_text_color(timeLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
                 lv_label_set_text(timeLbl, timeBuf);
                 lv_obj_align(timeLbl, LV_ALIGN_TOP_RIGHT, -4, 3);
             }
@@ -161,7 +161,7 @@ void LvMessagesScreen::rebuildList() {
         if (!ci.preview.empty()) {
             lv_obj_t* prevLbl = lv_label_create(row);
             lv_obj_set_style_text_font(prevLbl, smallFont, 0);
-            lv_obj_set_style_text_color(prevLbl, lv_color_hex(Theme::MUTED), 0);
+            lv_obj_set_style_text_color(prevLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
             lv_label_set_long_mode(prevLbl, LV_LABEL_LONG_CLIP);
             lv_obj_set_width(prevLbl, Theme::CONTENT_W - leftPad - 8);
             lv_label_set_text(prevLbl, ci.preview.c_str());

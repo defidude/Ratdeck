@@ -1,5 +1,6 @@
 #include "LvTabBar.h"
 #include "Theme.h"
+#include "LvTheme.h"
 #include <cstdio>
 #include "fonts/fonts.h"
 
@@ -24,7 +25,7 @@ void LvTabBar::create(lv_obj_t* parent) {
     lv_obj_align(_bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     lv_obj_set_style_bg_color(_bar, lv_color_hex(Theme::BG), 0);
     lv_obj_set_style_bg_opa(_bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(_bar, lv_color_hex(Theme::BORDER), 0);
+    lv_obj_set_style_border_color(_bar, lv_color_hex(Theme::DIVIDER), 0);
     lv_obj_set_style_border_width(_bar, 1, 0);
     lv_obj_set_style_border_side(_bar, LV_BORDER_SIDE_TOP, 0);
     lv_obj_set_style_pad_all(_bar, 0, 0);
@@ -39,6 +40,7 @@ void LvTabBar::create(lv_obj_t* parent) {
     for (int i = 0; i < TAB_COUNT; i++) {
         _tabs[i] = lv_label_create(_bar);
         lv_obj_set_style_text_font(_tabs[i], font, 0);
+        lv_label_set_recolor(_tabs[i], true);
         lv_label_set_text(_tabs[i], TAB_NAMES[i]);
         lv_obj_add_flag(_tabs[i], LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(_tabs[i], tab_click_cb, LV_EVENT_CLICKED, this);
@@ -72,9 +74,11 @@ void LvTabBar::refreshTab(int idx) {
     lv_obj_set_style_text_color(_tabs[idx],
         lv_color_hex(active ? Theme::TAB_ACTIVE : Theme::TAB_INACTIVE), 0);
 
-    char buf[24];
+    char buf[48];
     if (_unread[idx] > 0) {
-        snprintf(buf, sizeof(buf), "%s(%d)", TAB_NAMES[idx], _unread[idx]);
+        // Unread count in badge color using LVGL recolor
+        snprintf(buf, sizeof(buf), "%s #%06X %d#",
+            TAB_NAMES[idx], (unsigned int)Theme::BADGE_BG, _unread[idx]);
     } else {
         snprintf(buf, sizeof(buf), "%s", TAB_NAMES[idx]);
     }

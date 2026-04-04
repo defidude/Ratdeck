@@ -2,12 +2,12 @@
 
 #include <lvgl.h>
 
-// Ratspeak LVGL theme — matrix green on black cyberpunk aesthetic
+// Ratspeak LVGL theme — warm orange brand palette on dark neutrals
 namespace LvTheme {
 
 void init(lv_disp_t* disp);
 
-// Style accessors for common elements
+// Style accessors — existing (16)
 lv_style_t* styleScreen();
 lv_style_t* styleLabel();
 lv_style_t* styleLabelMuted();
@@ -24,5 +24,13 @@ lv_style_t* styleListBtn();
 lv_style_t* styleListBtnFocused();
 lv_style_t* styleDropdown();
 lv_style_t* styleSlider();
+
+// Style accessors — new (6)
+lv_style_t* styleBtnFocused();
+lv_style_t* styleTextareaFocused();
+lv_style_t* styleSectionHeader();
+lv_style_t* styleModal();
+lv_style_t* styleScrollbar();
+lv_style_t* styleRoller();
 
 }  // namespace LvTheme

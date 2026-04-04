@@ -1,153 +1,104 @@
 #include "LvTimezoneScreen.h"
 #include "ui/Theme.h"
 #include "ui/LvTheme.h"
-#include "config/Config.h"
+#include "ui/LvInput.h"
 #include "fonts/fonts.h"
+#include <Arduino.h>
 
 void LvTimezoneScreen::createUI(lv_obj_t* parent) {
     _screen = parent;
     lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(parent, lv_color_hex(Theme::BG), 0);
 
-    const lv_font_t* font12 = &lv_font_ratdeck_12;
-    const lv_font_t* font14 = &lv_font_ratdeck_14;
-
     // Title
     lv_obj_t* title = lv_label_create(parent);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(Theme::PRIMARY), 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(Theme::ACCENT), 0);
     lv_label_set_text(title, "SELECT TIMEZONE");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
 
     // Subtitle
     lv_obj_t* sub = lv_label_create(parent);
-    lv_obj_set_style_text_font(sub, font12, 0);
-    lv_obj_set_style_text_color(sub, lv_color_hex(Theme::SECONDARY), 0);
+    lv_obj_set_style_text_font(sub, &lv_font_ratdeck_12, 0);
+    lv_obj_set_style_text_color(sub, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     lv_label_set_text(sub, "Choose your nearest city:");
     lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 30);
 
-    // Scrollable list container
-    int listY = 50;
-    int listH = VISIBLE_ROWS * ROW_H;
-    _scrollContainer = lv_obj_create(parent);
-    lv_obj_set_size(_scrollContainer, Theme::SCREEN_W - 20, listH);
-    lv_obj_set_pos(_scrollContainer, 10, listY);
-    lv_obj_set_style_bg_color(_scrollContainer, lv_color_hex(Theme::BG), 0);
-    lv_obj_set_style_bg_opa(_scrollContainer, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(_scrollContainer, 1, 0);
-    lv_obj_set_style_border_color(_scrollContainer, lv_color_hex(Theme::BORDER), 0);
-    lv_obj_set_style_pad_all(_scrollContainer, 0, 0);
-    lv_obj_set_style_radius(_scrollContainer, 4, 0);
-    lv_obj_set_layout(_scrollContainer, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(_scrollContainer, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_scroll_snap_y(_scrollContainer, LV_SCROLL_SNAP_CENTER);
-    lv_obj_set_scrollbar_mode(_scrollContainer, LV_SCROLLBAR_MODE_OFF);
-
-    // Create rows
+    // Build roller options string: "City  UTC+X\nCity  UTC-Y\n..."
+    static char opts[640];
+    int pos = 0;
     for (int i = 0; i < TIMEZONE_COUNT; i++) {
-        lv_obj_t* row = lv_obj_create(_scrollContainer);
-        lv_obj_set_size(row, Theme::SCREEN_W - 24, ROW_H);
-        lv_obj_set_style_pad_left(row, 8, 0);
-        lv_obj_set_style_pad_right(row, 8, 0);
-        lv_obj_set_style_pad_top(row, 0, 0);
-        lv_obj_set_style_pad_bottom(row, 0, 0);
-        lv_obj_set_style_border_width(row, 0, 0);
-        lv_obj_set_style_radius(row, 2, 0);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-        bool selected = (i == _selectedIdx);
-        lv_obj_set_style_bg_color(row, lv_color_hex(selected ? Theme::SELECTION_BG : Theme::BG), 0);
-        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-
-        // City name (left)
-        lv_obj_t* lblCity = lv_label_create(row);
-        lv_obj_set_style_text_font(lblCity, font14, 0);
-        lv_obj_set_style_text_color(lblCity, lv_color_hex(selected ? Theme::BG : Theme::PRIMARY), 0);
-        lv_label_set_text(lblCity, TIMEZONE_TABLE[i].label);
-        lv_obj_align(lblCity, LV_ALIGN_LEFT_MID, 0, 0);
-
-        // UTC offset (right)
-        lv_obj_t* lblOffset = lv_label_create(row);
-        lv_obj_set_style_text_font(lblOffset, font12, 0);
-        lv_obj_set_style_text_color(lblOffset, lv_color_hex(selected ? Theme::BG : Theme::ACCENT), 0);
-        char buf[12];
-        int8_t off = TIMEZONE_TABLE[i].baseOffset;
-        snprintf(buf, sizeof(buf), "UTC%+d", off);
-        lv_label_set_text(lblOffset, buf);
-        lv_obj_align(lblOffset, LV_ALIGN_RIGHT_MID, 0, 0);
+        if (i > 0 && pos < (int)sizeof(opts) - 1) opts[pos++] = '\n';
+        pos += snprintf(opts + pos, sizeof(opts) - pos, "%-14s UTC%+d",
+            TIMEZONE_TABLE[i].label, TIMEZONE_TABLE[i].baseOffset);
     }
 
-    // Scroll initial selection into view
-    if (_selectedIdx >= 0 && _selectedIdx < TIMEZONE_COUNT) {
-        lv_obj_t* selRow = lv_obj_get_child(_scrollContainer, _selectedIdx);
-        if (selRow) lv_obj_scroll_to_view(selRow, LV_ANIM_OFF);
-    }
+    // Card container — green-bordered panel holding the roller
+    lv_obj_t* card = lv_obj_create(parent);
+    lv_obj_set_width(card, Theme::CONTENT_W - 20);
+    lv_obj_set_style_bg_color(card, lv_color_hex(Theme::BG), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(Theme::PRIMARY), 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_radius(card, 4, 0);
+    lv_obj_set_style_pad_left(card, 6, 0);
+    lv_obj_set_style_pad_right(card, 6, 0);
+    lv_obj_set_style_pad_top(card, 0, 0);
+    lv_obj_set_style_pad_bottom(card, 0, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_clip_corner(card, true, 0);
+    lv_obj_align_to(card, sub, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
 
-    // Hint at bottom
+    // Roller inside the card — borderless, fills the card
+    _roller = lv_roller_create(card);
+    lv_roller_set_options(_roller, opts, LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_visible_row_count(_roller, 7);
+    lv_obj_set_width(_roller, lv_pct(100));
+    lv_obj_center(_roller);
+    lv_roller_set_selected(_roller, _selectedIdx, LV_ANIM_OFF);
+
+    // Style the roller — no border, highlight goes edge-to-edge within card
+    lv_obj_add_style(_roller, LvTheme::styleRoller(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(_roller, &lv_font_ratdeck_14, LV_PART_MAIN);
+    // Selected row highlight
+    lv_obj_set_style_bg_color(_roller, lv_color_hex(Theme::BG_HOVER), LV_PART_SELECTED);
+    lv_obj_set_style_bg_opa(_roller, LV_OPA_COVER, LV_PART_SELECTED);
+    lv_obj_set_style_text_color(_roller, lv_color_hex(Theme::PRIMARY), LV_PART_SELECTED);
+    lv_obj_set_style_text_font(_roller, &lv_font_ratdeck_14, LV_PART_SELECTED);
+
+    // Size the card to fit the roller
+    lv_obj_update_layout(parent);
+    lv_obj_set_height(card, lv_obj_get_height(_roller));
+
+    // Add to focus group for trackball navigation
+    lv_group_add_obj(LvInput::group(), _roller);
+
+    // Hint — positioned below roller
     lv_obj_t* hint = lv_label_create(parent);
-    lv_obj_set_style_text_font(hint, font12, 0);
-    lv_obj_set_style_text_color(hint, lv_color_hex(Theme::ACCENT), 0);
+    lv_obj_set_style_text_font(hint, &lv_font_ratdeck_12, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     lv_label_set_text(hint, "[Enter] Select");
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
-}
-
-void LvTimezoneScreen::updateSelection(int oldIdx, int newIdx) {
-    if (!_scrollContainer) return;
-    uint32_t count = lv_obj_get_child_cnt(_scrollContainer);
-
-    const lv_font_t* font14 = &lv_font_ratdeck_14;
-    const lv_font_t* font12 = &lv_font_ratdeck_12;
-
-    // Deselect old
-    if (oldIdx >= 0 && oldIdx < (int)count) {
-        lv_obj_t* row = lv_obj_get_child(_scrollContainer, oldIdx);
-        lv_obj_set_style_bg_color(row, lv_color_hex(Theme::BG), 0);
-        // Update text colors
-        lv_obj_t* lblCity = lv_obj_get_child(row, 0);
-        lv_obj_t* lblOff = lv_obj_get_child(row, 1);
-        if (lblCity) lv_obj_set_style_text_color(lblCity, lv_color_hex(Theme::PRIMARY), 0);
-        if (lblOff) lv_obj_set_style_text_color(lblOff, lv_color_hex(Theme::ACCENT), 0);
-    }
-
-    // Select new
-    if (newIdx >= 0 && newIdx < (int)count) {
-        lv_obj_t* row = lv_obj_get_child(_scrollContainer, newIdx);
-        lv_obj_set_style_bg_color(row, lv_color_hex(Theme::SELECTION_BG), 0);
-        lv_obj_t* lblCity = lv_obj_get_child(row, 0);
-        lv_obj_t* lblOff = lv_obj_get_child(row, 1);
-        if (lblCity) lv_obj_set_style_text_color(lblCity, lv_color_hex(Theme::BG), 0);
-        if (lblOff) lv_obj_set_style_text_color(lblOff, lv_color_hex(Theme::BG), 0);
-
-        // Scroll to make visible
-        lv_obj_scroll_to_view(row, LV_ANIM_ON);
-    }
+    lv_obj_align_to(hint, card, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
 }
 
 bool LvTimezoneScreen::handleKey(const KeyEvent& event) {
     if (event.enter || event.character == '\n' || event.character == '\r') {
-        // Guard: ignore Enter for first 600ms to prevent stale keypress bleed
         if (millis() - _enterTime < ENTER_GUARD_MS) return true;
+        _selectedIdx = lv_roller_get_selected(_roller);
         if (_doneCb) _doneCb(_selectedIdx);
         return true;
     }
-
+    // Trackball maps to PREV/NEXT (focus group nav), but roller needs
+    // explicit selection changes since it's the only focusable widget
     if (event.up) {
-        if (_selectedIdx > 0) {
-            int old = _selectedIdx;
-            _selectedIdx--;
-            updateSelection(old, _selectedIdx);
-        }
+        uint16_t sel = lv_roller_get_selected(_roller);
+        if (sel > 0) lv_roller_set_selected(_roller, sel - 1, LV_ANIM_ON);
         return true;
     }
-
     if (event.down) {
-        if (_selectedIdx < TIMEZONE_COUNT - 1) {
-            int old = _selectedIdx;
-            _selectedIdx++;
-            updateSelection(old, _selectedIdx);
-        }
+        uint16_t sel = lv_roller_get_selected(_roller);
+        if (sel < TIMEZONE_COUNT - 1) lv_roller_set_selected(_roller, sel + 1, LV_ANIM_ON);
         return true;
     }
-
-    return true;  // Consume all keys
+    return true;  // Consume all keys on this screen
 }

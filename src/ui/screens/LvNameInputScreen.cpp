@@ -1,6 +1,7 @@
 #include "LvNameInputScreen.h"
 #include "ui/Theme.h"
 #include "ui/LvTheme.h"
+#include "ui/LvInput.h"
 #include "config/Config.h"
 #include "fonts/fonts.h"
 
@@ -26,7 +27,7 @@ void LvNameInputScreen::createUI(lv_obj_t* parent) {
     // Prompt
     lv_obj_t* prompt = lv_label_create(parent);
     lv_obj_set_style_text_font(prompt, &lv_font_ratdeck_12, 0);
-    lv_obj_set_style_text_color(prompt, lv_color_hex(Theme::SECONDARY), 0);
+    lv_obj_set_style_text_color(prompt, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     lv_label_set_text(prompt, "Enter your display name:");
     lv_obj_align(prompt, LV_ALIGN_TOP_MID, 0, 70);
 
@@ -38,7 +39,9 @@ void LvNameInputScreen::createUI(lv_obj_t* parent) {
     lv_textarea_set_one_line(_textarea, true);
     lv_textarea_set_placeholder_text(_textarea, "Optional");
     lv_obj_add_style(_textarea, LvTheme::styleTextarea(), 0);
+    lv_obj_add_style(_textarea, LvTheme::styleTextareaFocused(), LV_STATE_FOCUSED);
     lv_obj_set_style_text_font(_textarea, &lv_font_ratdeck_14, 0);
+    lv_group_add_obj(LvInput::group(), _textarea);
 
     // Hint
     lv_obj_t* hint = lv_label_create(parent);
@@ -50,7 +53,7 @@ void LvNameInputScreen::createUI(lv_obj_t* parent) {
     // Version
     lv_obj_t* ver = lv_label_create(parent);
     lv_obj_set_style_text_font(ver, &lv_font_ratdeck_10, 0);
-    lv_obj_set_style_text_color(ver, lv_color_hex(Theme::MUTED), 0);
+    lv_obj_set_style_text_color(ver, lv_color_hex(Theme::TEXT_MUTED), 0);
     char verBuf[32];
     snprintf(verBuf, sizeof(verBuf), "v%s", RATDECK_VERSION_STRING);
     lv_label_set_text(ver, verBuf);

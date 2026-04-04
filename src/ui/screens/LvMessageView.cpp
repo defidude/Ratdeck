@@ -48,6 +48,13 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_set_style_text_color(_lblHeader, lv_color_hex(Theme::ACCENT), 0);
     lv_obj_align(_lblHeader, LV_ALIGN_LEFT_MID, 4, 0);
 
+    // Make header tappable for back navigation
+    lv_obj_add_flag(_header, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(_header, [](lv_event_t* e) {
+        auto* self = (LvMessageView*)lv_event_get_user_data(e);
+        if (self->_onBack) self->_onBack();
+    }, LV_EVENT_CLICKED, this);
+
     // Message scroll area (middle, grows to fill)
     _msgScroll = lv_obj_create(parent);
     lv_obj_set_width(_msgScroll, lv_pct(100));
@@ -60,6 +67,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_set_style_radius(_msgScroll, 0, 0);
     lv_obj_set_layout(_msgScroll, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(_msgScroll, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_style(_msgScroll, LvTheme::styleScrollbar(), LV_PART_SCROLLBAR);
 
     // Input row (bottom, just above tab bar)
     _inputRow = lv_obj_create(parent);
@@ -78,21 +86,18 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_align(_textarea, LV_ALIGN_LEFT_MID, 0, 0);
     lv_textarea_set_one_line(_textarea, true);
     lv_textarea_set_placeholder_text(_textarea, "Type message...");
-    lv_obj_set_style_bg_color(_textarea, lv_color_hex(Theme::BG), 0);
+    lv_obj_add_style(_textarea, LvTheme::styleTextarea(), 0);
     lv_obj_set_style_border_width(_textarea, 0, 0);
-    lv_obj_set_style_text_color(_textarea, lv_color_hex(Theme::PRIMARY), 0);
     lv_obj_set_style_text_font(_textarea, font, 0);
     lv_obj_set_style_pad_all(_textarea, 2, 0);
 
     _btnSend = lv_btn_create(_inputRow);
     lv_obj_set_size(_btnSend, 40, 22);
     lv_obj_align(_btnSend, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_bg_color(_btnSend, lv_color_hex(Theme::SELECTION_BG), 0);
-    lv_obj_set_style_radius(_btnSend, 3, 0);
+    lv_obj_add_style(_btnSend, LvTheme::styleBtn(), 0);
     lv_obj_set_style_pad_all(_btnSend, 0, 0);
     lv_obj_t* sendLbl = lv_label_create(_btnSend);
     lv_obj_set_style_text_font(sendLbl, &lv_font_ratdeck_10, 0);
-    lv_obj_set_style_text_color(sendLbl, lv_color_hex(Theme::PRIMARY), 0);
     lv_label_set_text(sendLbl, "Send");
     lv_obj_center(sendLbl);
     lv_obj_add_event_cb(_btnSend, [](lv_event_t* e) {
@@ -218,20 +223,20 @@ void LvMessageView::appendMessage(const LXMFMessage& msg) {
     }
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
 
-    // Message label with word wrap — status-based colors for outgoing
-    uint32_t textColor = Theme::ACCENT; // incoming default
+    // Message text color — incoming is plain text, outgoing reflects delivery status
+    uint32_t textColor = Theme::TEXT_PRIMARY; // incoming default
     if (!msg.incoming) {
         switch (msg.status) {
             case LXMFStatus::QUEUED:
             case LXMFStatus::SENDING:
-                textColor = Theme::WARNING_CLR; break;
+                textColor = Theme::TEXT_SECONDARY; break;
             case LXMFStatus::SENT:
             case LXMFStatus::DELIVERED:
-                textColor = Theme::PRIMARY; break;
+                textColor = Theme::TEXT_PRIMARY; break;
             case LXMFStatus::FAILED:
                 textColor = Theme::ERROR_CLR; break;
             default:
-                textColor = Theme::PRIMARY; break;
+                textColor = Theme::TEXT_PRIMARY; break;
         }
     }
     lv_obj_t* lbl = lv_label_create(box);
@@ -244,9 +249,9 @@ void LvMessageView::appendMessage(const LXMFMessage& msg) {
     // Status indicator for outgoing (tracked for partial updates)
     if (!msg.incoming) {
         const char* ind = "~";
-        uint32_t indColor = Theme::MUTED;
+        uint32_t indColor = Theme::TEXT_MUTED;
         if (msg.status == LXMFStatus::SENT || msg.status == LXMFStatus::DELIVERED) {
-            ind = "*"; indColor = Theme::ACCENT;
+            ind = "*"; indColor = Theme::SUCCESS;
         } else if (msg.status == LXMFStatus::FAILED) {
             ind = "!"; indColor = Theme::ERROR_CLR;
         }
@@ -271,7 +276,7 @@ void LvMessageView::appendMessage(const LXMFMessage& msg) {
             snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", tm->tm_hour, tm->tm_min);
             lv_obj_t* timeLbl = lv_label_create(bubble);
             lv_obj_set_style_text_font(timeLbl, &lv_font_ratdeck_10, 0);
-            lv_obj_set_style_text_color(timeLbl, lv_color_hex(Theme::MUTED), 0);
+            lv_obj_set_style_text_color(timeLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
             lv_label_set_text(timeLbl, timeBuf);
             if (msg.incoming) {
                 lv_obj_align_to(timeLbl, box, LV_ALIGN_OUT_BOTTOM_LEFT, 2, 1);
@@ -311,9 +316,9 @@ void LvMessageView::updateMessageStatus(int msgIdx, LXMFStatus status) {
 
     // Update status indicator
     const char* ind = "~";
-    uint32_t indColor = Theme::MUTED;
+    uint32_t indColor = Theme::TEXT_MUTED;
     if (status == LXMFStatus::SENT || status == LXMFStatus::DELIVERED) {
-        ind = "*"; indColor = Theme::ACCENT;
+        ind = "*"; indColor = Theme::SUCCESS;
     } else if (status == LXMFStatus::FAILED) {
         ind = "!"; indColor = Theme::ERROR_CLR;
     }
@@ -322,9 +327,9 @@ void LvMessageView::updateMessageStatus(int msgIdx, LXMFStatus status) {
 
     // Update text color to match status
     if (textLbl) {
-        uint32_t textColor = Theme::PRIMARY;
+        uint32_t textColor = Theme::TEXT_PRIMARY;
         if (status == LXMFStatus::QUEUED || status == LXMFStatus::SENDING) {
-            textColor = Theme::WARNING_CLR;
+            textColor = Theme::TEXT_SECONDARY;
         } else if (status == LXMFStatus::FAILED) {
             textColor = Theme::ERROR_CLR;
         }

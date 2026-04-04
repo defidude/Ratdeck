@@ -2,7 +2,7 @@
 
 #include <lvgl.h>
 
-// Ratspeak LVGL theme — warm orange brand palette on dark neutrals
+// Ratspeak LVGL theme — matrix green on black
 namespace LvTheme {
 
 void init(lv_disp_t* disp);

@@ -4,7 +4,7 @@
 
 // =============================================================================
 // RatDeck — Design System Constants
-// Brand orange palette with warm dark neutrals
+// Matrix green palette on pure black
 // =============================================================================
 
 namespace Theme {
@@ -42,7 +42,7 @@ constexpr uint32_t MSG_IN_BG      = 0x0A120A;  // Incoming bubble
 
 // --- Tab Bar ---
 constexpr uint32_t TAB_ACTIVE     = 0x00CC66;  // Active tab (= PRIMARY)
-constexpr uint32_t TAB_INACTIVE   = 0x9A908A;  // Inactive tabs (= TEXT_SECONDARY)
+constexpr uint32_t TAB_INACTIVE   = 0x9A908A;  // Inactive tabs (warm gray)
 constexpr uint32_t BADGE_BG       = 0xF87171;  // Unread badge (= ERROR_CLR)
 
 

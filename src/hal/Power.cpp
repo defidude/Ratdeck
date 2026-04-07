@@ -1,8 +1,10 @@
 #include "Power.h"
 #include "hal/Display.h"
+#include "hal/Keyboard.h"
 
-// Forward declaration — display instance provided externally
+// Forward declarations — display & keyboard instances provided externally
 extern Display display;
+extern Keyboard keyboard;
 
 void Power::enablePeripherals() {
     // CRITICAL: GPIO 10 must be HIGH to enable all T-Deck Plus peripherals
@@ -66,6 +68,13 @@ void Power::setBrightness(uint8_t percent) {
     }
 }
 
+void Power::setKbBrightness(uint8_t percent, bool apply) {
+    keyboard.setBacklightBrightness(constrain(percent, 1, 100));
+    if (apply) { // Show the new brightness
+        keyboard.backlightOn();
+    }
+}
+
 void Power::loop() {
     unsigned long elapsed = millis() - _lastActivity;
 
@@ -102,13 +111,22 @@ void Power::setState(State newState) {
                 display.wakeup();
             }
             display.setBrightness(percentToPWM(_brightnessPct));
+            if (_kbAutoOn) {
+                keyboard.backlightOn();
+            }
             break;
         case DIMMED:
             display.setBrightness(DIM_PWM);
+            if (_kbAutoOff) {
+                keyboard.backlightOff();
+            }
             break;
         case SCREEN_OFF:
             display.setBrightness(0);
             display.sleep();
+            if (_kbAutoOff) {
+                keyboard.backlightOff();
+            }
             break;
     }
 }

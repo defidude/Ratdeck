@@ -91,3 +91,33 @@ void Keyboard::update() {
 
     _hasEvent = true;
 }
+
+bool Keyboard::setBacklightBrightness(uint8_t percent) {
+    percent = constrain(percent, 1, 100);
+    // [1, 100] % -> [31, 255] PWM
+    constexpr uint16_t SCALE = 255 - 31;
+    constexpr uint16_t DIV   = 100 - 1;
+    uint16_t tmp = (uint16_t)(percent - 1) * SCALE;
+    tmp = (tmp + DIV / 2) / DIV; // +DIV/2 for nearest‑integer rounding
+    _backlightBrightness = (uint8_t)(31 + tmp);
+
+    Wire.beginTransmission(KB_I2C_ADDR);
+    Wire.write(0x02); // LILYGO_KB_ALT_B_BRIGHTNESS_CMD
+    Wire.write(_backlightBrightness);
+    return Wire.endTransmission() == 0;
+}
+
+bool Keyboard::backlightOn() {
+    return setBrightness(_backlightBrightness);
+}
+
+bool Keyboard::backlightOff() {
+    return setBrightness(0);
+}
+
+bool Keyboard::setBrightness(uint8_t pwm) {
+    Wire.beginTransmission(KB_I2C_ADDR);
+    Wire.write(0x01); // LILYGO_KB_BRIGHTNESS_CMD
+    Wire.write(pwm);
+    return Wire.endTransmission() == 0;
+}

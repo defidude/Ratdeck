@@ -219,17 +219,31 @@ void LvSettingsScreen::buildItems() {
 
     // Display & Input
     int dispStart = idx;
-    _items.push_back({"Brightness", SettingType::INTEGER,
+    _items.push_back({"Display Brightness", SettingType::INTEGER,
         [&s]() { return s.brightness; }, [&s](int v) { s.brightness = v; },
         [](int v) { return String(v) + "%"; }, 5, 100, 5});
     idx++;
-    _items.push_back({"Dim Timeout", SettingType::INTEGER,
+    _items.push_back({"Display Dim Timeout", SettingType::INTEGER,
         [&s]() { return s.screenDimTimeout; }, [&s](int v) { s.screenDimTimeout = v; },
         [](int v) { return String(v) + "s"; }, 5, 300, 5});
     idx++;
-    _items.push_back({"Off Timeout", SettingType::INTEGER,
+    _items.push_back({"Display Off Timeout", SettingType::INTEGER,
         [&s]() { return s.screenOffTimeout; }, [&s](int v) { s.screenOffTimeout = v; },
         [](int v) { return String(v) + "s"; }, 10, 600, 10});
+    idx++;
+    _items.push_back({"Keyboard Backlight Brightness", SettingType::INTEGER,
+        [&s]() { return s.keyboardBrightness; }, [&s](int v) { s.keyboardBrightness = v; },
+        [](int v) { return String(v) + "%"; }, 5, 100, 5});
+    idx++;
+    _items.push_back({"Keyboard Backlight Auto-ON", SettingType::TOGGLE,
+        [&s]() { return s.keyboardAutoOn ? 1 : 0; },
+        [&s](int v) { s.keyboardAutoOn = (v != 0); },
+        [](int v) { return v ? String("ON") : String("OFF"); }});
+    idx++;
+    _items.push_back({"Keyboard Backlight Auto-OFF", SettingType::TOGGLE,
+        [&s]() { return s.keyboardAutoOff ? 1 : 0; },
+        [&s](int v) { s.keyboardAutoOff = (v != 0); },
+        [](int v) { return v ? String("ON") : String("OFF"); }});
     idx++;
     _items.push_back({"Trackball Speed", SettingType::INTEGER,
         [&s]() { return s.trackballSpeed; }, [&s](int v) { s.trackballSpeed = v; },
@@ -703,6 +717,7 @@ void LvSettingsScreen::onEnter() {
     _textEditing = false;
     _confirmingReset = false;
     _confirmingDevMode = false;
+    _kbBrightness = _cfg ? _cfg->settings().keyboardBrightness : 0;
     rebuildCategoryList();
 }
 
@@ -1395,6 +1410,12 @@ void LvSettingsScreen::applyAndSave() {
         _power->setBrightness(s.brightness);
         _power->setDimTimeout(s.screenDimTimeout);
         _power->setOffTimeout(s.screenOffTimeout);
+        if (_kbBrightness != s.keyboardBrightness) {
+            _power->setKbBrightness(s.keyboardBrightness, true);
+            _kbBrightness = s.keyboardBrightness;
+        }
+        _power->setKbAutoOn(s.keyboardAutoOn);
+        _power->setKbAutoOff(s.keyboardAutoOff);
     }
     if (_radio && _radio->isRadioOnline()) {
         _radio->setFrequency(s.loraFrequency);

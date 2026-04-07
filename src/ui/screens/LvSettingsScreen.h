@@ -166,6 +166,9 @@ private:
     void snapshotTCPSettings();
     bool tcpSettingsChanged() const;
 
+    // Keyboard backlight change detection
+    uint8_t _kbBrightness = 0;
+
     // LVGL widgets
     lv_obj_t* _scrollContainer = nullptr;
     std::vector<lv_obj_t*> _rowObjs;

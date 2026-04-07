@@ -651,6 +651,9 @@ void setup() {
     powerMgr.setDimTimeout(userConfig.settings().screenDimTimeout);
     powerMgr.setOffTimeout(userConfig.settings().screenOffTimeout);
     powerMgr.setBrightness(userConfig.settings().brightness);
+    powerMgr.setKbBrightness(userConfig.settings().keyboardBrightness);
+    powerMgr.setKbAutoOn(userConfig.settings().keyboardAutoOn);
+    powerMgr.setKbAutoOff(userConfig.settings().keyboardAutoOff);
 
     // Step 24.5: GPS init
 #if HAS_GPS
@@ -896,6 +899,11 @@ void setup() {
             prefs.putInt("bootc", 0);
             prefs.end();
         }
+    }
+
+    if (userConfig.settings().keyboardAutoOn) {
+        // We are in ACTIVE power state here, switch keyboard backlight ON
+        keyboard.backlightOn();
     }
 
     Serial.println("[BOOT] RatDeck ready");

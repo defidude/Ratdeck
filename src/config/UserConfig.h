@@ -42,6 +42,11 @@ struct UserSettings {
     uint8_t brightness = 100;  // Percentage 1-100
     bool denseFontMode = false;       // T-Deck Plus: adaptive font toggle
 
+    // Keyboard
+    uint8_t keyboardBrightness = 100; // Percentage 1-100
+    bool keyboardAutoOn = false;      // Backlight ON when switching to ACTIVE power state
+    bool keyboardAutoOff = false;     // Backlight OFF when switching from ACTIVE power state
+
     // Trackball
     uint8_t trackballSpeed = 3;       // 1-5 sensitivity
 

@@ -20,10 +20,15 @@ public:
     float batteryVoltage() const;
     int batteryPercent() const;
 
-    // Backlight — accepts percentage 1-100
+    // Display backlight — accepts percentage 1-100
     void setBrightness(uint8_t percent);
     void setDimTimeout(uint16_t seconds) { _dimTimeout = seconds * 1000UL; }
     void setOffTimeout(uint16_t seconds) { _offTimeout = seconds * 1000UL; }
+
+    // Keyboard backlight — accepts percentage 1-100
+    void setKbBrightness(uint8_t percent, bool apply=false);
+    void setKbAutoOn(bool enable) { _kbAutoOn = enable; }
+    void setKbAutoOff(bool enable) { _kbAutoOff = enable; }
 
     enum State { ACTIVE, DIMMED, SCREEN_OFF };
     State state() const { return _state; }
@@ -40,4 +45,6 @@ private:
     unsigned long _offTimeout = 60000;
     uint8_t _brightnessPct = 100;  // User brightness as 1-100%
     static constexpr uint8_t DIM_PWM = 40;  // ~15% PWM when dimmed
+    bool _kbAutoOn = false;
+    bool _kbAutoOff = false;
 };

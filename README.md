@@ -45,12 +45,20 @@ On first boot, Ratdeck generates a Reticulum identity and shows a name input scr
 
 **Sending a message:** Find someone in Peers, select to open chat, type your message, hit Enter. Status goes yellow (sending) → green (delivery confirmed).
 
-**Radio presets** (Setup → Radio):
-- **Long Range** — SF12, 62.5 kHz, 22 dBm. Longest distance, slow.
-- **Balanced** — SF9, 125 kHz, 17 dBm. Medium distance, medium.
-- **Fast** — SF7, 250 kHz, 14 dBm. Shortest distance, fast.
+**Radio presets** (Setup → Radio). Format: name — SF, bandwidth, coding rate, TX power. `Long Fast` is the compiled-in default.
 
-All radio parameters are individually tunable. Changes apply immediately, no reboot. Please operate in accordance with local laws, as you are solely responsible for knowing which regulations and requirements apply to your jurisdiction.
+| Preset | SF | BW | CR | TXP | Bitrate | Link budget |
+|---|---|---|---|---|---|---|
+| Short Turbo | 7 | 500 kHz | 4/5 | 14 dBm | 21.99 kbps | 140 dB |
+| Short Fast | 7 | 250 kHz | 4/5 | 14 dBm | 10.84 kbps | 143 dB |
+| Short Slow | 8 | 250 kHz | 4/5 | 14 dBm | 6.25 kbps | 145.5 dB |
+| Medium Fast | 9 | 250 kHz | 4/5 | 17 dBm | 3.52 kbps | 148 dB |
+| Medium Slow | 10 | 250 kHz | 4/5 | 17 dBm | 1.95 kbps | 150.5 dB |
+| Long Turbo | 11 | 500 kHz | 4/8 | 22 dBm | 1.34 kbps | 150 dB |
+| **Long Fast** *(default)* | **11** | **250 kHz** | **4/5** | **22 dBm** | **1.07 kbps** | **153 dB** |
+| Long Moderate | 11 | 125 kHz | 4/8 | 22 dBm | 0.34 kbps | 156 dB |
+
+All radio parameters are also individually tunable; changes apply immediately, no reboot. Please operate in accordance with local laws, as you are solely responsible for knowing which regulations and requirements apply to your jurisdiction.
 
 ### WiFi Bridging (Alpha)
 

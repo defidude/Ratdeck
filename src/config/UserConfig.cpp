@@ -168,8 +168,8 @@ bool UserConfig::load(SDStore& sd, FlashStore& flash) {
     // Auto-migrate: flash had config but SD didn't — copy to SD
     if (ok && sd.isReady()) {
         Serial.println("[CONFIG] Migrating config from flash to SD...");
-        sd.ensureDir("/ratputer");
-        sd.ensureDir("/ratputer/config");
+        sd.ensureDir("/ratdeck");
+        sd.ensureDir("/ratdeck/config");
         String migrateJson = serializeToJson();
         if (sd.writeString(SD_PATH_USER_CONFIG, migrateJson)) {
             Serial.println("[CONFIG] Migration complete");
@@ -185,8 +185,8 @@ bool UserConfig::save(SDStore& sd, FlashStore& flash) {
 
     // Write to SD (primary)
     if (sd.isReady()) {
-        sd.ensureDir("/ratputer");
-        sd.ensureDir("/ratputer/config");
+        sd.ensureDir("/ratdeck");
+        sd.ensureDir("/ratdeck/config");
         if (sd.writeString(SD_PATH_USER_CONFIG, json)) {
             Serial.println("[CONFIG] Saved to SD");
             ok = true;

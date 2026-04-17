@@ -569,7 +569,7 @@ void LvSettingsScreen::buildItems() {
         initSD.action = [this]() {
             if (!_sd || !_sd->isReady()) { if (_ui) _ui->lvStatusBar().showToast("No SD card!", 1200); return; }
             if (_ui) _ui->lvStatusBar().showToast("Initializing SD...", 2000);
-            bool ok = _sd->formatForRatputer();
+            bool ok = _sd->formatForRatdeck();
             if (_ui) _ui->lvStatusBar().showToast(ok ? "SD initialized!" : "SD init failed!", 1500);
         };
         _items.push_back(initSD);
@@ -583,7 +583,7 @@ void LvSettingsScreen::buildItems() {
         wipeSD.action = [this]() {
             if (!_sd || !_sd->isReady()) { if (_ui) _ui->lvStatusBar().showToast("No SD card!", 1200); return; }
             if (_ui) _ui->lvStatusBar().showToast("Wiping SD data...", 2000);
-            bool ok = _sd->wipeRatputer();
+            bool ok = _sd->wipeRatdeck();
             if (_ui) _ui->lvStatusBar().showToast(ok ? "SD wiped & reinit!" : "Wipe failed!", 1500);
         };
         _items.push_back(wipeSD);
@@ -603,7 +603,7 @@ void LvSettingsScreen::buildItems() {
             }
             _confirmingReset = false;
             if (_ui) _ui->lvStatusBar().showToast("Factory resetting...", 3000);
-            if (_sd && _sd->isReady()) _sd->wipeRatputer();
+            if (_sd && _sd->isReady()) _sd->wipeRatdeck();
             if (_flash) _flash->format();
             nvs_flash_erase();
             delay(1500);  // Long enough for key state to clear before reboot

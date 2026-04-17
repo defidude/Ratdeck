@@ -370,7 +370,7 @@ void setup() {
     digitalWrite(LORA_CS, HIGH);
     delay(10);
     if (sdStore.begin(&sharedSPI, SD_CS)) {
-        sdStore.formatForRatputer();
+        sdStore.formatForRatdeck();
         Serial.println("[SD] Card ready");
     } else {
         Serial.println("[SD] Not detected");
@@ -796,7 +796,7 @@ void setup() {
         if (wipe) {
             Serial.println("[BOOT] User chose to wipe old data");
             lvDataCleanScreen.showStatus("Clearing old data...");
-            sdStore.wipeRatputer();
+            sdStore.wipeRatdeck();
             if (announceManager) announceManager->clearAll();
             Serial.println("[BOOT] Old data cleared");
             lvDataCleanScreen.showStatus("Done! Rebooting...");

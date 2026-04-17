@@ -33,12 +33,12 @@
 #define PATH_CONTACTS       "/contacts/"
 #define PATH_MESSAGES       "/messages/"
 
-// --- SD Card Paths (shared with Ratputer) ---
-#define SD_PATH_CONFIG_DIR   "/ratputer/config"
-#define SD_PATH_USER_CONFIG  "/ratputer/config/user.json"
-#define SD_PATH_MESSAGES     "/ratputer/messages/"
-#define SD_PATH_CONTACTS     "/ratputer/contacts/"
-#define SD_PATH_IDENTITY     "/ratputer/identity/identity.key"
+// --- SD Card Paths ---
+#define SD_PATH_CONFIG_DIR   "/ratdeck/config"
+#define SD_PATH_USER_CONFIG  "/ratdeck/config/user.json"
+#define SD_PATH_MESSAGES     "/ratdeck/messages/"
+#define SD_PATH_CONTACTS     "/ratdeck/contacts/"
+#define SD_PATH_IDENTITY     "/ratdeck/identity/identity.key"
 
 // --- TCP Client ---
 #define MAX_TCP_CONNECTIONS         4

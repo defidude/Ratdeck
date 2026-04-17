@@ -16,8 +16,8 @@ bool MessageStore::begin(FlashStore* flash, SDStore* sd) {
     _flash->ensureDir(PATH_MESSAGES);
 
     if (_sd && _sd->isReady()) {
-        _sd->ensureDir("/ratputer");
-        _sd->ensureDir("/ratputer/messages");
+        _sd->ensureDir("/ratdeck");
+        _sd->ensureDir("/ratdeck/messages");
         migrateFlashToSD();
     }
 

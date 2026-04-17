@@ -169,17 +169,17 @@ String SDStore::readString(const char* path) {
     return result;
 }
 
-bool SDStore::wipeRatputer() {
+bool SDStore::wipeRatdeck() {
     if (!_ready) return false;
-    Serial.println("[SD] Wiping /ratputer/ ...");
-    wipeDir("/ratputer/messages");
-    wipeDir("/ratputer/contacts");
-    wipeDir("/ratputer/identity");
-    wipeDir("/ratputer/config");
-    wipeDir("/ratputer/transport");
-    SD.rmdir("/ratputer");
+    Serial.println("[SD] Wiping /ratdeck/ ...");
+    wipeDir("/ratdeck/messages");
+    wipeDir("/ratdeck/contacts");
+    wipeDir("/ratdeck/identity");
+    wipeDir("/ratdeck/config");
+    wipeDir("/ratdeck/transport");
+    SD.rmdir("/ratdeck");
     Serial.println("[SD] Wipe complete, recreating dirs...");
-    return formatForRatputer();
+    return formatForRatdeck();
 }
 
 void SDStore::wipeDir(const char* path) {
@@ -201,9 +201,9 @@ void SDStore::wipeDir(const char* path) {
 
 bool SDStore::hasExistingData() {
     if (!_ready) return false;
-    if (SD.exists("/ratputer/config.json")) return true;
-    if (SD.exists("/ratputer/identity/identity")) return true;
-    File dir = SD.open("/ratputer/messages");
+    if (SD.exists("/ratdeck/config.json")) return true;
+    if (SD.exists("/ratdeck/identity/identity")) return true;
+    File dir = SD.open("/ratdeck/messages");
     if (dir && dir.isDirectory()) {
         File entry = dir.openNextFile();
         bool found = (bool)entry;
@@ -214,16 +214,16 @@ bool SDStore::hasExistingData() {
     return false;
 }
 
-bool SDStore::formatForRatputer() {
+bool SDStore::formatForRatdeck() {
     if (!_ready) return false;
-    Serial.println("[SD] Creating Ratputer directory structure...");
+    Serial.println("[SD] Creating Ratdeck directory structure...");
     bool ok = true;
-    ok &= ensureDir("/ratputer");
-    ok &= ensureDir("/ratputer/config");
-    ok &= ensureDir("/ratputer/messages");
-    ok &= ensureDir("/ratputer/contacts");
-    ok &= ensureDir("/ratputer/identity");
-    ok &= ensureDir("/ratputer/transport");
+    ok &= ensureDir("/ratdeck");
+    ok &= ensureDir("/ratdeck/config");
+    ok &= ensureDir("/ratdeck/messages");
+    ok &= ensureDir("/ratdeck/contacts");
+    ok &= ensureDir("/ratdeck/identity");
+    ok &= ensureDir("/ratdeck/transport");
     if (ok) Serial.println("[SD] Directory structure ready");
     return ok;
 }

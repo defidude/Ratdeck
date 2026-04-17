@@ -435,7 +435,7 @@ void AnnounceManager::saveNameCache() {
     String json;
     serializeJson(doc, json);
     if (_sd && _sd->isReady()) {
-        _sd->writeString("/ratputer/config/names.json", json);
+        _sd->writeString("/ratdeck/config/names.json", json);
     }
     if (_flash) {
         _flash->writeString("/config/names.json", json);
@@ -446,7 +446,7 @@ void AnnounceManager::saveNameCache() {
 void AnnounceManager::loadNameCache() {
     String json;
     if (_sd && _sd->isReady()) {
-        json = _sd->readString("/ratputer/config/names.json");
+        json = _sd->readString("/ratdeck/config/names.json");
     }
     if (json.isEmpty() && _flash) {
         json = _flash->readString("/config/names.json");

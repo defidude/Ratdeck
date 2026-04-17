@@ -35,7 +35,49 @@ size_t LittleFSFileSystem::write_file(const char* p, const RNS::Bytes& data) {
     return w;
 }
 
-RNS::FileStream LittleFSFileSystem::open_file(const char*, RNS::FileStream::MODE) { return {RNS::Type::NONE}; }
+// Arduino-LittleFS wrapper for RNS::FileStreamImpl. Needed by microReticulum's
+// Persistence::serialize<std::map<...>> streaming path in Transport::write_path_table.
+// Without this, write_path_table always logs "serialize failed" because the
+// default stub returns NONE, and the path table never persists across reboots.
+namespace {
+class LittleFSStreamImpl : public RNS::FileStreamImpl {
+public:
+    LittleFSStreamImpl(File&& f) : _f(std::move(f)) {}
+    ~LittleFSStreamImpl() override { if (_f) _f.close(); }
+
+protected:
+    const char* name() override { return _f ? _f.name() : ""; }
+    size_t size() override { return _f ? _f.size() : 0; }
+    void close() override { if (_f) _f.close(); }
+
+    size_t write(uint8_t byte) override { return _f ? _f.write(byte) : 0; }
+    size_t write(const uint8_t* buffer, size_t len) override { return _f ? _f.write(buffer, len) : 0; }
+
+    int available() override { return _f ? _f.available() : 0; }
+    int read() override { return _f ? _f.read() : -1; }
+    int peek() override { return _f ? _f.peek() : -1; }
+    void flush() override { if (_f) _f.flush(); }
+
+private:
+    File _f;
+};
+}  // namespace
+
+RNS::FileStream LittleFSFileSystem::open_file(const char* path, RNS::FileStream::MODE mode) {
+    const char* openMode = "r";
+    if (mode == RNS::FileStream::MODE_WRITE)  openMode = "w";
+    if (mode == RNS::FileStream::MODE_APPEND) openMode = "a";
+    if (mode != RNS::FileStream::MODE_READ) {
+        String p(path);
+        int lastSlash = p.lastIndexOf('/');
+        if (lastSlash > 0 && !LittleFS.exists(p.substring(0, lastSlash).c_str())) {
+            LittleFS.mkdir(p.substring(0, lastSlash).c_str());
+        }
+    }
+    File f = LittleFS.open(path, openMode);
+    if (!f) return {RNS::Type::NONE};
+    return RNS::FileStream(new LittleFSStreamImpl(std::move(f)));
+}
 bool LittleFSFileSystem::remove_file(const char* p) { return LittleFS.remove(p); }
 bool LittleFSFileSystem::rename_file(const char* f, const char* t) { return LittleFS.rename(f, t); }
 bool LittleFSFileSystem::directory_exists(const char* p) { return LittleFS.exists(p); }
@@ -74,7 +116,7 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
         for (const char* name : files) {
             if (!LittleFS.exists(name)) {
                 char sdPath[64];
-                snprintf(sdPath, sizeof(sdPath), "/ratputer/transport%s", name);
+                snprintf(sdPath, sizeof(sdPath), "/ratdeck/transport%s", name);
                 uint8_t buf[4096];
                 size_t len = 0;
                 if (_sd->readFile(sdPath, buf, sizeof(buf), len) && len > 0) {
@@ -236,7 +278,7 @@ void ReticulumManager::saveIdentityToAll(const RNS::Bytes& keyData) {
     _flash->writeAtomic(PATH_IDENTITY, keyData.data(), keyData.size());
     // SD
     if (_sd && _sd->isReady()) {
-        _sd->ensureDir("/ratputer/identity");
+        _sd->ensureDir("/ratdeck/identity");
         _sd->writeAtomic(SD_PATH_IDENTITY, keyData.data(), keyData.size());
     }
     // NVS (always available, survives flash/SD failures)
@@ -282,8 +324,8 @@ void ReticulumManager::persistData() {
                         if (buf) {
                             f.readBytes((char*)buf, sz);
                             char sdPath[64];
-                            snprintf(sdPath, sizeof(sdPath), "/ratputer/transport%s", name);
-                            _sd->ensureDir("/ratputer/transport");
+                            snprintf(sdPath, sizeof(sdPath), "/ratdeck/transport%s", name);
+                            _sd->ensureDir("/ratdeck/transport");
                             _sd->writeSimple(sdPath, buf, sz);
                             free(buf);
                         }

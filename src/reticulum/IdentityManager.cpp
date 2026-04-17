@@ -117,8 +117,8 @@ bool IdentityManager::switchTo(int index, RNS::Identity& outIdentity) {
     // Copy the active key to the standard identity path for ReticulumManager
     _flash->writeAtomic("/identity/identity.key", keyData.data(), keyData.size());
     if (_sd && _sd->isReady()) {
-        _sd->ensureDir("/ratputer/identity");
-        _sd->writeAtomic("/ratputer/identity/identity.key", keyData.data(), keyData.size());
+        _sd->ensureDir("/ratdeck/identity");
+        _sd->writeAtomic("/ratdeck/identity/identity.key", keyData.data(), keyData.size());
     }
 
     outIdentity = id;

@@ -150,16 +150,23 @@ static const char* currentPosixTZ() {
 // Announce with display name (MessagePack-encoded app_data)
 // =============================================================================
 
+// LXMF announce app_data, current upstream format:
+//   [display_name(bin), stamp_cost(uint), supported_functionality(array)]
+// Always emit fixarray(3) so Python LXMF doesn't default auto_compress=True for
+// our destinations. Empty supported_functionality list = we do NOT support
+// SF_COMPRESSION (bz2) — see microReticulum/src/Compression/BZ2.cpp.
 RNS::Bytes encodeAnnounceName(const String& name) {
-    if (name.isEmpty()) return {};
-    size_t len = name.length();
-    if (len > 31) len = 31;
-    uint8_t buf[3 + 31];
-    buf[0] = 0x91;                     // msgpack fixarray(1)
-    buf[1] = 0xC4;                     // msgpack bin 8
-    buf[2] = (uint8_t)len;             // bin len
-    memcpy(buf + 3, name.c_str(), len);
-    return RNS::Bytes(buf, 3 + len);
+    size_t nameLen = name.length();
+    if (nameLen > 31) nameLen = 31;
+    uint8_t buf[5 + 31];
+    size_t i = 0;
+    buf[i++] = 0x93;                   // fixarray(3)
+    buf[i++] = 0xC4;                   // bin 8
+    buf[i++] = (uint8_t)nameLen;
+    if (nameLen) { memcpy(buf + i, name.c_str(), nameLen); i += nameLen; }
+    buf[i++] = 0x00;                   // stamp_cost = 0
+    buf[i++] = 0x90;                   // empty fixarray (no SF_* supported)
+    return RNS::Bytes(buf, i);
 }
 
 static void announceWithName(bool silent = false) {

@@ -85,11 +85,16 @@ void InputManager::update() {
                 _clickPending = true;
                 _longPressFired = false;
                 _clickStartMs = millis();
+                // Capture screen state BEFORE activity wakes it, so long-press
+                // doesn't blank a freshly-woken screen (wake-then-blank ping-pong)
+                _clickFromScreenOn = _powerMgr ? _powerMgr->isScreenOn() : true;
                 _activity = true;
                 _strongActivity = true;  // Click wakes from screen off
             } else if (!_longPressFired && millis() - _clickStartMs >= LONG_PRESS_MS) {
-                // Long press threshold reached
-                _longPress = true;
+                // Long press threshold reached — only emit if click started screen-on
+                if (_clickFromScreenOn) {
+                    _longPress = true;
+                }
                 _longPressFired = true;
                 _hasKey = false;  // Suppress any concurrent events
                 _activity = true;
@@ -117,8 +122,10 @@ void InputManager::update() {
         }
     }
 
-    // Touch activity check — throttled to ~50Hz
-    if (_touch) {
+    // Touch activity check — throttled to ~50Hz.
+    // Suppressed while screen is off (pocket-carry safety: prevents
+    // accidental wakes from pressure on the touch panel).
+    if (_touch && (!_powerMgr || _powerMgr->isScreenOn())) {
         unsigned long now = millis();
         if (now - _lastTouchPoll >= TOUCH_POLL_MS) {
             _lastTouchPoll = now;

@@ -435,6 +435,7 @@ void setup() {
 
     // Step 10: Input manager
     inputManager.begin(&keyboard, &trackball, &touch);
+    inputManager.setPowerMgr(&powerMgr);
 
     // Step 10.5: LVGL input drivers
     LvInput::init(&keyboard, &trackball, &touch);
@@ -933,9 +934,11 @@ void loop() {
         powerMgr.weakActivity();   // Trackball: wake from dim only
     }
 
-    // 2. Long-press dispatch
+    // 2. Long-press dispatch — screen blanking is the default if no screen consumes it
     if (inputManager.hadLongPress()) {
-        ui.handleLongPress();
+        if (!ui.handleLongPress()) {
+            powerMgr.forceScreenOff();
+        }
     }
 
     // 3. Key event dispatch

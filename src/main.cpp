@@ -522,7 +522,9 @@ void setup() {
     // Step 18: Announce manager
     lvBootScreen.setProgress(0.78f, "Loading contacts...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
-    announceManager = new AnnounceManager();
+    // Filter to lxmf.delivery so we don't capture every aspect (lxmf.propagation,
+    // nomadnetwork.node, etc.) from the same peer as separate "doubled" entries.
+    announceManager = new AnnounceManager("lxmf.delivery");
     announceManager->setStorage(&sdStore, &flash);
     announceManager->setLocalDestHash(rns.destination().hash());
     if (rns.loraInterface()) announceManager->setLoRaInterface(rns.loraInterface());

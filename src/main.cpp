@@ -536,15 +536,8 @@ void setup() {
     // (LVGL boot renders via lv_timer_handler in setProgress)
     userConfig.load(sdStore, flash);
 
-    // Seed default Ratspeak TCP hub if no connections configured
-    if (userConfig.settings().tcpConnections.empty()) {
-        TCPEndpoint ep;
-        ep.host = "rns.ratspeak.org";
-        ep.port = 4242;
-        ep.autoConnect = true;
-        userConfig.settings().tcpConnections.push_back(ep);
-        Serial.println("[CONFIG] Default TCP hub: rns.ratspeak.org:4242");
-    }
+    // No default TCP hub.  Users opt in via Settings → TCP Server →
+    // "Ratspeak Hub" (seeds rns.ratspeak.org) or "Custom" (host/port).
 
     // Sync display name between active identity slot and config.
     // The identity slot is the source of truth for the name.

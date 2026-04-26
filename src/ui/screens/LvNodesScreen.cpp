@@ -324,6 +324,9 @@ void LvNodesScreen::updateNicknameDisplay() {
 
 bool LvNodesScreen::handleLongPress() {
     if (!_am) return false;
+    // Only consume long-press once the user has actively navigated into
+    // the list. Otherwise let main.cpp blank the screen.
+    if (!_focusActive) return false;
     int nodeIdx = getFocusedNodeIdx();
     if (nodeIdx < 0 || nodeIdx >= (int)_am->nodes().size()) return false;
     const auto& node = _am->nodes()[nodeIdx];

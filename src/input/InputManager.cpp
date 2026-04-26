@@ -107,8 +107,9 @@ void InputManager::update() {
             // GPIO is HIGH — only accept release after debounce period
             if (millis() - _lastClickDownMs >= CLICK_DEBOUNCE_MS) {
                 _clickPending = false;
-                if (!_longPressFired && !_hasKey) {
-                    // Short click — generate deferred enter event
+                // Suppress wake-click: if the press began with the screen off,
+                // the click's job was just to wake the device, not to confirm.
+                if (!_longPressFired && !_hasKey && _clickFromScreenOn) {
                     _keyEvent = {};
                     _keyEvent.enter = true;
                     _keyEvent.character = '\n';

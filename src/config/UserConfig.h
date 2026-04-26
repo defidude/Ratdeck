@@ -33,6 +33,12 @@ struct UserSettings {
     String wifiSTASSID;
     String wifiSTAPassword;
 
+    // AutoInterface (Reticulum LAN auto-discovery via IPv6 multicast).
+    // Active only in STA mode; opt-in until proven stable on real APs.
+    bool   autoIfaceEnabled  = false;
+    String autoIfaceGroupId  = "reticulum";
+    uint8_t autoIfaceMaxPeers = 8;
+
     // TCP outbound connections (STA mode only)
     std::vector<TCPEndpoint> tcpConnections;
 

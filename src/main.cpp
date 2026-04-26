@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
+#include <esp_netif.h>
 #include <lvgl.h>
 
 #include "config/BoardConfig.h"
@@ -47,6 +48,7 @@
 #include "transport/WiFiInterface.h"
 #include "transport/TCPClientInterface.h"
 #include "transport/BLEInterface.h"
+#include "transport/AutoInterfaceWrapper.h"
 #include "transport/BLESideband.h"
 #include "config/UserConfig.h"
 #include "audio/AudioNotify.h"
@@ -132,6 +134,10 @@ constexpr unsigned long LVGL_INTERVAL_MS = 33;          // ~30 FPS
 constexpr unsigned long TCP_GLOBAL_BUDGET_MS = 35;      // Max cumulative TCP time per loop
 bool wifiDeferredAnnounce = false;
 unsigned long wifiConnectedAt = 0;
+
+AutoInterfaceWrapper autoIface;
+bool autoIfaceDeferredStart = false;
+unsigned long autoIfaceDeferredAt = 0;
 
 // LXMF diagnostic counters (reset each heartbeat)
 static uint32_t diagTcpSkipEvents = 0;
@@ -238,6 +244,21 @@ void onHotkeySettings() {
 }
 void onHotkeyAnnounce() {
     announceWithName();
+}
+void onHotkeyAutoIface() {
+    Serial.println("=== AUTOIFACE DUMP ===");
+    Serial.printf("Enabled in settings : %s\n",
+        userConfig.settings().autoIfaceEnabled ? "YES" : "no");
+    Serial.printf("Online              : %s\n", autoIface.isOnline() ? "YES" : "no");
+    if (autoIface.isOnline()) {
+        Serial.printf("Multicast address   : %s\n", autoIface.multicastAddress().c_str());
+        Serial.printf("Link-local          : %s\n", WiFi.localIPv6().toString().c_str());
+        Serial.printf("Peers               : %u\n", (unsigned)autoIface.peerCount());
+    }
+    Serial.printf("Deferred-start armed: %s (elapsed=%lums)\n",
+        autoIfaceDeferredStart ? "YES" : "no",
+        autoIfaceDeferredStart ? (millis() - autoIfaceDeferredAt) : 0UL);
+    Serial.println("======================");
 }
 void onHotkeyDiag() {
     Serial.println("=== DIAGNOSTIC DUMP ===");
@@ -449,6 +470,7 @@ void setup() {
     hotkeys.registerHotkey('s', "Settings", onHotkeySettings);
     hotkeys.registerHotkey('a', "Announce", onHotkeyAnnounce);
     hotkeys.registerHotkey('d', "Diagnostics", onHotkeyDiag);
+    hotkeys.registerHotkey('i', "AutoIface dump", onHotkeyAutoIface);
     hotkeys.registerHotkey('t', "Radio Test", onHotkeyRadioTest);
     hotkeys.registerHotkey('r', "RSSI Monitor", onHotkeyRssiMonitor);
     hotkeys.setTabCycleCallback([](int dir) {
@@ -609,6 +631,12 @@ void setup() {
         if (!userConfig.settings().wifiSTASSID.isEmpty()) {
             WiFi.mode(WIFI_STA);
             WiFi.setAutoReconnect(true);
+            // AutoInterface needs an IPv6 link-local address.  Must be enabled
+            // BEFORE WiFi.begin() so SLAAC starts on STA association.
+            if (userConfig.settings().autoIfaceEnabled) {
+                WiFi.enableIpV6();
+                Serial.println("[WIFI] IPv6 enabled (AutoInterface ON)");
+            }
             WiFi.begin(userConfig.settings().wifiSTASSID.c_str(),
                        userConfig.settings().wifiSTAPassword.c_str());
             wifiSTAStarted = true;
@@ -1029,6 +1057,16 @@ void loop() {
             // Defer announce to let VPS register the connection (non-blocking)
             wifiDeferredAnnounce = true;
             wifiConnectedAt = millis();
+            // Arm AutoInterface deferred-start; SLAAC needs ~1.5–10s to assign
+            // a link-local IPv6 address, so we don't start the interface here.
+            // Trigger link-local creation AFTER association (calling
+            // esp_netif_create_ip6_linklocal pre-association is a no-op on
+            // some Arduino-ESP32 versions).
+            if (userConfig.settings().autoIfaceEnabled) {
+                WiFi.enableIpV6();
+                autoIfaceDeferredStart = true;
+                autoIfaceDeferredAt = millis();
+            }
         } else if (!connected && wifiSTAConnected) {
             wifiSTAConnected = false;
             ui.lvStatusBar().setWiFiActive(false);
@@ -1041,6 +1079,8 @@ void loop() {
             tcpClients.clear();
             tcpIfaces.clear();
             Serial.println("[WIFI] STA disconnected, TCP interfaces deregistered");
+            autoIface.stop();
+            autoIfaceDeferredStart = false;
         }
     }
 
@@ -1060,6 +1100,31 @@ void loop() {
         }
     }
 
+    // 7.6. AutoInterface deferred start — fire once SLAAC assigns a link-local
+    // IPv6 address.  Arduino's IPv6Address::toString returns the expanded
+    // form ("0000:0000:..." for unset; "fe80:0000:..." once SLAAC completes),
+    // so check the prefix bytes directly: link-local is fe80::/10.
+    if (autoIfaceDeferredStart) {
+        unsigned long elapsed = millis() - autoIfaceDeferredAt;
+        if (elapsed >= 1500) {
+            IPv6Address ll = WiFi.localIPv6();
+            bool isLinkLocal = (ll[0] == 0xfe) && ((ll[1] & 0xc0) == 0x80);
+            if (isLinkLocal) {
+                autoIfaceDeferredStart = false;
+                esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+                uint32_t scope = sta ? esp_netif_get_netif_impl_index(sta) : 1;
+                autoIface.start(
+                    userConfig.settings().autoIfaceGroupId.c_str(),
+                    userConfig.settings().autoIfaceMaxPeers,
+                    ll.toString(),
+                    scope);
+            } else if (elapsed >= 10000) {
+                autoIfaceDeferredStart = false;
+                Serial.println("[AUTOIFACE] SLAAC timeout — no link-local after 10s");
+            }
+        }
+    }
+
     // 8. WiFi + TCP loops (with global budget) — skip only if RNS severely overloaded
     {
         bool skipTcp = (rnsDuration > 500);
@@ -1073,6 +1138,11 @@ void loop() {
                 yield();
             }
         }
+        // AutoInterface always runs — its loop is non-blocking, capped at 4
+        // packets per socket per call, time-gated for announces/peer-jobs.
+        // Skipping it under TCP load causes peers to time out (22 s silence
+        // window) when a TCP flood holds the loop above the skip threshold.
+        autoIface.loop();
     }
 
     // 9. BLE loops
@@ -1100,6 +1170,8 @@ void loop() {
                 if (tcp && tcp->isConnected()) { anyTcpUp = true; break; }
             }
             ui.lvStatusBar().setTCPConnected(anyTcpUp);
+            ui.lvStatusBar().setAutoIfacePeers(
+                autoIface.isOnline() ? (int)autoIface.peerCount() : -1);
 #if HAS_GPS
             if (userConfig.settings().gpsTimeEnabled) {
                 ui.lvStatusBar().setGPSFix(gps.hasTimeFix());
@@ -1160,9 +1232,11 @@ void loop() {
                     if (tcp && tcp->isConnected()) tcpUp++;
                     if (tcp) tcpRx += tcp->hubRxCount();
                 }
-                Serial.printf("[HEART-DIAG] ifaces=%d tcp=%d/%d wifi=%s\n",
+                Serial.printf("[HEART-DIAG] ifaces=%d tcp=%d/%d wifi=%s autoiface=%s peers=%u\n",
                     (int)ifaces.size(), tcpUp, (int)tcpClients.size(),
-                    wifiSTAConnected ? "STA" : (wifiImpl ? "AP" : "OFF"));
+                    wifiSTAConnected ? "STA" : (wifiImpl ? "AP" : "OFF"),
+                    autoIface.isOnline() ? "ON" : "off",
+                    (unsigned)autoIface.peerCount());
                 Serial.printf("[LXMF-DIAG] tcp_rx=%d tcp_skip=%lu ann_filt=%lu\n",
                     tcpRx, (unsigned long)diagTcpSkipEvents,
                     (unsigned long)rns.announceFilterCount());

@@ -424,6 +424,11 @@ void LvSettingsScreen::buildItems() {
         [&s](int v) { s.bleEnabled = (v != 0); },
         [](int v) { return v ? String("ON") : String("OFF"); }});
     idx++;
+    _items.push_back({"Auto-discover LAN", SettingType::TOGGLE,
+        [&s]() { return s.autoIfaceEnabled ? 1 : 0; },
+        [&s](int v) { s.autoIfaceEnabled = (v != 0); },
+        [](int v) { return v ? String("ON") : String("OFF"); }});
+    idx++;
     _categories.push_back({"Network", netStart, idx - netStart,
         [&s]() {
             const char* modes[] = {"OFF", "AP", "STA"};
@@ -1338,6 +1343,7 @@ void LvSettingsScreen::snapshotRebootSettings() {
     _rebootSnap.wifiSTASSID = s.wifiSTASSID;
     _rebootSnap.wifiSTAPassword = s.wifiSTAPassword;
     _rebootSnap.bleEnabled = s.bleEnabled;
+    _rebootSnap.autoIfaceEnabled = s.autoIfaceEnabled;
     _gpsSnapEnabled = s.gpsTimeEnabled;
 }
 
@@ -1347,7 +1353,8 @@ bool LvSettingsScreen::rebootSettingsChanged() const {
     return s.wifiMode != _rebootSnap.wifiMode
         || s.wifiSTASSID != _rebootSnap.wifiSTASSID
         || s.wifiSTAPassword != _rebootSnap.wifiSTAPassword
-        || s.bleEnabled != _rebootSnap.bleEnabled;
+        || s.bleEnabled != _rebootSnap.bleEnabled
+        || s.autoIfaceEnabled != _rebootSnap.autoIfaceEnabled;
 }
 
 void LvSettingsScreen::snapshotTCPSettings() {

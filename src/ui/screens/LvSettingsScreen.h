@@ -155,6 +155,7 @@ private:
         String wifiSTASSID;
         String wifiSTAPassword;
         bool bleEnabled;
+        bool autoIfaceEnabled;
     };
     RebootSnapshot _rebootSnap;
     void snapshotRebootSettings();

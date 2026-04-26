@@ -31,6 +31,11 @@ bool UserConfig::parseJson(const String& json) {
     _settings.wifiSTASSID    = doc["wifi_sta_ssid"]    | "";
     _settings.wifiSTAPassword = doc["wifi_sta_pass"]   | "";
 
+    // AutoInterface (LAN auto-discovery)
+    _settings.autoIfaceEnabled  = doc["autoiface_en"]    | false;
+    _settings.autoIfaceGroupId  = doc["autoiface_group"] | "reticulum";
+    _settings.autoIfaceMaxPeers = doc["autoiface_max"]   | 8;
+
     // TCP outbound connections
     _settings.tcpConnections.clear();
     JsonArray tcpArr = doc["tcp_connections"];
@@ -92,6 +97,10 @@ String UserConfig::serializeToJson() const {
     doc["wifi_ap_pass"] = _settings.wifiAPPassword;
     doc["wifi_sta_ssid"] = _settings.wifiSTASSID;
     doc["wifi_sta_pass"] = _settings.wifiSTAPassword;
+
+    doc["autoiface_en"]    = _settings.autoIfaceEnabled;
+    doc["autoiface_group"] = _settings.autoIfaceGroupId;
+    doc["autoiface_max"]   = _settings.autoIfaceMaxPeers;
 
     JsonArray tcpArr = doc["tcp_connections"].to<JsonArray>();
     for (auto& ep : _settings.tcpConnections) {

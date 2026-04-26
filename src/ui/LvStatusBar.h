@@ -15,6 +15,8 @@ public:
     void setWiFiActive(bool active) { _wifiActive = active; }
     void setWiFiEnabled(bool enabled) { _wifiEnabled = enabled; }
     void setTCPConnected(bool connected) { _tcpConnected = connected; }
+    // -1 = disabled (hide); 0 = yellow (idle); >0 = green (peers)
+    void setAutoIfacePeers(int n) { _autoIfacePeers = n; }
     void setGPSFix(bool hasFix);
     void setBatteryPercent(int pct);
     void flashAnnounce();
@@ -41,6 +43,7 @@ private:
     bool _wifiActive = false;
     bool _wifiEnabled = false;
     bool _tcpConnected = false;
+    int _autoIfacePeers = -1;  // -1 hidden, 0 yellow, >0 green
     bool _gpsFix = false;
     bool _use24h = false;
     int _battPct = -1;

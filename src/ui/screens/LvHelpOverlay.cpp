@@ -29,6 +29,7 @@ void LvHelpOverlay::create() {
     mkLabel("Ctrl+S  Settings", Theme::TEXT_PRIMARY);
     mkLabel("Ctrl+A  Announce", Theme::TEXT_PRIMARY);
     mkLabel("Ctrl+D  Diagnostics", Theme::TEXT_PRIMARY);
+    mkLabel("Ctrl+I  AutoIface dump", Theme::TEXT_PRIMARY);
     mkLabel("Ctrl+T  Radio Test", Theme::TEXT_PRIMARY);
     mkLabel("Ctrl+R  RSSI Monitor", Theme::TEXT_PRIMARY);
     mkLabel(",  /    Prev/Next Tab", Theme::TEXT_PRIMARY);

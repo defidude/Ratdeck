@@ -31,8 +31,11 @@ void InputManager::update() {
             _activity = true;  // Movement is weak — only wakes from dim
         }
 
-        // Generate nav events from trackball movement (click handled below via GPIO)
-        if (!_hasKey) {
+        // Generate nav events from trackball movement (click handled below via GPIO).
+        // Skip entirely when screen is off so a backpacked device doesn't accumulate
+        // phantom up/down/left/right keypresses or wake from movement.
+        bool screenOn = !_powerMgr || _powerMgr->isScreenOn();
+        if (!_hasKey && screenOn) {
             unsigned long now = millis();
 
             // Accumulate deltas, clamp to ±20

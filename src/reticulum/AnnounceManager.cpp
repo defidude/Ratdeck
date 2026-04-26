@@ -349,15 +349,15 @@ void AnnounceManager::saveContact(const DiscoveredNode& node) {
     serializeJson(doc, json);
     String filename = hexHash.substr(0, 16).c_str();
     filename += ".json";
-    if (_sd && _sd->isReady()) { _sd->writeString((String(SD_PATH_CONTACTS) + filename).c_str(), json); }
-    if (_flash) { _flash->writeString((String(PATH_CONTACTS) + filename).c_str(), json); }
+    if (_sd && _sd->isReady()) { _sd->writeString((String(SD_PATH_CONTACTS) + "/" + filename).c_str(), json); }
+    if (_flash) { _flash->writeString((String(PATH_CONTACTS) + "/" + filename).c_str(), json); }
 }
 
 void AnnounceManager::removeContact(const std::string& hexHash) {
     String filename = hexHash.substr(0, 16).c_str();
     filename += ".json";
-    if (_sd && _sd->isReady()) { _sd->remove((String(SD_PATH_CONTACTS) + filename).c_str()); }
-    if (_flash) { _flash->remove((String(PATH_CONTACTS) + filename).c_str()); }
+    if (_sd && _sd->isReady()) { _sd->remove((String(SD_PATH_CONTACTS) + "/" + filename).c_str()); }
+    if (_flash) { _flash->remove((String(PATH_CONTACTS) + "/" + filename).c_str()); }
 }
 
 bool AnnounceManager::deleteContact(int nodeIdx) {

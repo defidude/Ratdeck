@@ -30,14 +30,17 @@
 #define PATH_IDENTITY_BAK   "/identity/identity.key.bak"
 #define PATH_PATHS          "/transport/paths.msgpack"
 #define PATH_USER_CONFIG    "/config/user.json"
-#define PATH_CONTACTS       "/contacts/"
-#define PATH_MESSAGES       "/messages/"
+// Directory paths intentionally have NO trailing slash — some FATFS/VFS
+// readdir paths fail to enumerate when given a path ending in '/'.
+// Concat sites must add their own '/' before the basename.
+#define PATH_CONTACTS       "/contacts"
+#define PATH_MESSAGES       "/messages"
 
 // --- SD Card Paths ---
 #define SD_PATH_CONFIG_DIR   "/ratdeck/config"
 #define SD_PATH_USER_CONFIG  "/ratdeck/config/user.json"
-#define SD_PATH_MESSAGES     "/ratdeck/messages/"
-#define SD_PATH_CONTACTS     "/ratdeck/contacts/"
+#define SD_PATH_MESSAGES     "/ratdeck/messages"
+#define SD_PATH_CONTACTS     "/ratdeck/contacts"
 #define SD_PATH_IDENTITY     "/ratdeck/identity/identity.key"
 
 // --- TCP Client ---

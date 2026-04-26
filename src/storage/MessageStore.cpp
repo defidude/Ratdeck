@@ -146,7 +146,7 @@ void MessageStore::migrateTruncatedDirs() {
                 // Old dirs are exactly 16 hex chars; new ones are 32
                 if (dirName.length() == 16) {
                     // Read first JSON file inside to get the full hash
-                    String oldDir = String(basePath) + dirName.c_str();
+                    String oldDir = String(basePath) + "/" + dirName.c_str();
                     File inner = openFn(oldDir.c_str());
                     if (inner && inner.isDirectory()) {
                         File jsonFile = inner.openNextFile();
@@ -176,7 +176,7 @@ void MessageStore::migrateTruncatedDirs() {
                         inner.close();
 
                         if (!fullHash.empty() && fullHash.substr(0, 16) == dirName) {
-                            String newDir = String(basePath) + fullHash.c_str();
+                            String newDir = String(basePath) + "/" + fullHash.c_str();
                             renames.push_back({oldDir, newDir});
                         }
                     }
@@ -738,11 +738,11 @@ int MessageStore::totalUnreadCount() const {
 }
 
 String MessageStore::conversationDir(const std::string& peerHex) const {
-    return String(PATH_MESSAGES) + peerHex.c_str();
+    return String(PATH_MESSAGES) + "/" + peerHex.c_str();
 }
 
 String MessageStore::sdConversationDir(const std::string& peerHex) const {
-    return String(SD_PATH_MESSAGES) + peerHex.c_str();
+    return String(SD_PATH_MESSAGES) + "/" + peerHex.c_str();
 }
 
 void MessageStore::enforceFlashLimit(const std::string& peerHex) {

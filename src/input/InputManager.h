@@ -3,10 +3,12 @@
 #include "hal/Keyboard.h"
 #include "hal/Trackball.h"
 #include "hal/TouchInput.h"
+#include "hal/Power.h"
 
 class InputManager {
 public:
     void begin(Keyboard* kb, Trackball* tb, TouchInput* touch);
+    void setPowerMgr(Power* pm) { _powerMgr = pm; }
     void update();
 
     // Keyboard events
@@ -26,6 +28,7 @@ private:
     Keyboard* _kb = nullptr;
     Trackball* _tb = nullptr;
     TouchInput* _touch = nullptr;
+    Power* _powerMgr = nullptr;
 
     bool _hasKey = false;
     KeyEvent _keyEvent;
@@ -34,6 +37,7 @@ private:
     bool _longPress = false;
     bool _clickPending = false;
     bool _longPressFired = false;
+    bool _clickFromScreenOn = true;  // Captured at click DOWN to gate long-press
     unsigned long _clickStartMs = 0;
     unsigned long _lastClickDownMs = 0;
     static constexpr unsigned long LONG_PRESS_MS = 1200;

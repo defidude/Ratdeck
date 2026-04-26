@@ -48,9 +48,20 @@ uint8_t Power::percentToPWM(uint8_t pct) const {
 
 void Power::activity() {
     _lastActivity = millis();
+    if (_state == SCREEN_OFF) {
+        _justWokeFromOff = true;
+    }
     if (_state != ACTIVE) {
         setState(ACTIVE);
     }
+}
+
+void Power::forceScreenOff() {
+    if (_justWokeFromOff) {
+        _justWokeFromOff = false;
+        return;
+    }
+    setState(SCREEN_OFF);
 }
 
 void Power::weakActivity() {
@@ -96,6 +107,8 @@ void Power::loop() {
         case SCREEN_OFF:
             break;
     }
+
+    _justWokeFromOff = false;
 }
 
 void Power::setState(State newState) {

@@ -31,8 +31,11 @@ void InputManager::update() {
             _activity = true;  // Movement is weak — only wakes from dim
         }
 
-        // Generate nav events from trackball movement (click handled below via GPIO)
-        if (!_hasKey) {
+        // Generate nav events from trackball movement (click handled below via GPIO).
+        // Skip entirely when screen is off so a backpacked device doesn't accumulate
+        // phantom up/down/left/right keypresses or wake from movement.
+        bool screenOn = !_powerMgr || _powerMgr->isScreenOn();
+        if (!_hasKey && screenOn) {
             unsigned long now = millis();
 
             // Accumulate deltas, clamp to ±20
@@ -85,11 +88,16 @@ void InputManager::update() {
                 _clickPending = true;
                 _longPressFired = false;
                 _clickStartMs = millis();
+                // Capture screen state BEFORE activity wakes it, so long-press
+                // doesn't blank a freshly-woken screen (wake-then-blank ping-pong)
+                _clickFromScreenOn = _powerMgr ? _powerMgr->isScreenOn() : true;
                 _activity = true;
                 _strongActivity = true;  // Click wakes from screen off
             } else if (!_longPressFired && millis() - _clickStartMs >= LONG_PRESS_MS) {
-                // Long press threshold reached
-                _longPress = true;
+                // Long press threshold reached — only emit if click started screen-on
+                if (_clickFromScreenOn) {
+                    _longPress = true;
+                }
                 _longPressFired = true;
                 _hasKey = false;  // Suppress any concurrent events
                 _activity = true;
@@ -117,8 +125,10 @@ void InputManager::update() {
         }
     }
 
-    // Touch activity check — throttled to ~50Hz
-    if (_touch) {
+    // Touch activity check — throttled to ~50Hz.
+    // Suppressed while screen is off (pocket-carry safety: prevents
+    // accidental wakes from pressure on the touch panel).
+    if (_touch && (!_powerMgr || _powerMgr->isScreenOn())) {
         unsigned long now = millis();
         if (now - _lastTouchPoll >= TOUCH_POLL_MS) {
             _lastTouchPoll = now;

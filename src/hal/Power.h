@@ -15,6 +15,9 @@ public:
     void activity();
     // Weak activity = trackball — wakes from DIM only, not SCREEN_OFF
     void weakActivity();
+    // Manual screen-off; no-op if activity() just woke from SCREEN_OFF this tick
+    // so a single keypress can't both wake and re-sleep.
+    void forceScreenOff();
 
     // Battery
     float batteryVoltage() const;
@@ -57,4 +60,5 @@ private:
     static constexpr uint8_t DIM_PWM = 40;  // ~15% PWM when dimmed
     bool _kbAutoOn = false;
     bool _kbAutoOff = false;
+    bool _justWokeFromOff = false;
 };

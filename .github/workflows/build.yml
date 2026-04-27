@@ -125,3 +125,4 @@ jobs:
             ratdeck-firmware.zip
             ratdeck-merged.bin
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

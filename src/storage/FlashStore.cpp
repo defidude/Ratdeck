@@ -1,15 +1,20 @@
 #include "FlashStore.h"
 
 bool FlashStore::begin() {
-    // Partition label must match partitions_16MB.csv ("littlefs")
-    // Arduino ESP32 LittleFS defaults to "spiffs" label, so we must specify it
-    if (!LittleFS.begin(true, "/littlefs", 10, "littlefs")) {
-        Serial.println("[FLASH] LittleFS mount failed, formatting...");
-        LittleFS.format();
-        if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
-            Serial.println("[FLASH] LittleFS failed after format!");
-            return false;
+    // Standalone ratdeck labels this partition "littlefs"; bmorcelli/Launcher
+    // labels the equivalent partition "spiffs". Try ours first, fall back.
+    const char* labels[] = { "littlefs", "spiffs" };
+    bool mounted = false;
+    for (const char* label : labels) {
+        if (LittleFS.begin(true, "/littlefs", 10, label)) {
+            Serial.printf("[FLASH] LittleFS mounted on partition '%s'\n", label);
+            mounted = true;
+            break;
         }
+    }
+    if (!mounted) {
+        Serial.println("[FLASH] LittleFS mount failed on all known labels!");
+        return false;
     }
     _ready = true;
 

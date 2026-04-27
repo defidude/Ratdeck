@@ -123,13 +123,13 @@ void LvMessageView::onEnter() {
         if (_ui) _ui->lvTabBar().setUnreadCount(LvTabBar::TAB_MSGS, _lxmf->unreadCount());
         // Register status callback — partial update without full rebuild
         std::string peer = _peerHex;
-        _lxmf->setStatusCallback([this, peer](const std::string& peerHex, double, LXMFStatus newStatus) {
+        _lxmf->setStatusCallback([this, peer](const std::string& peerHex, double ts, LXMFStatus newStatus) {
             if (peerHex != peer) return;
             for (int i = _cachedMsgs.size() - 1; i >= 0; i--) {
-                if (!_cachedMsgs[i].incoming && _cachedMsgs[i].status == LXMFStatus::QUEUED) {
+                if (!_cachedMsgs[i].incoming && fabs(_cachedMsgs[i].timestamp - ts) < 1.0) {
                     _cachedMsgs[i].status = newStatus;
                     updateMessageStatus(i, newStatus);
-                    break;
+                    return;
                 }
             }
         });
@@ -246,20 +246,14 @@ void LvMessageView::appendMessage(const LXMFMessage& msg) {
     lv_obj_set_width(lbl, maxBubbleW - 14);
     lv_label_set_text(lbl, msg.content.c_str());
 
-    // Status indicator for outgoing (tracked for partial updates)
+    // Status indicator for outgoing (tracked for partial updates).
+    // Glyph + colour come from applyStatusGlyph so single-check vs
+    // double-check rendering stays in one place.
     if (!msg.incoming) {
-        const char* ind = "~";
-        uint32_t indColor = Theme::TEXT_MUTED;
-        if (msg.status == LXMFStatus::SENT || msg.status == LXMFStatus::DELIVERED) {
-            ind = "*"; indColor = Theme::SUCCESS;
-        } else if (msg.status == LXMFStatus::FAILED) {
-            ind = "!"; indColor = Theme::ERROR_CLR;
-        }
         lv_obj_t* statusLbl = lv_label_create(box);
-        lv_obj_set_style_text_font(statusLbl, &lv_font_ratdeck_10, 0);
-        lv_obj_set_style_text_color(statusLbl, lv_color_hex(indColor), 0);
-        lv_label_set_text(statusLbl, ind);
-        lv_obj_align(statusLbl, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+        lv_obj_set_style_text_font(statusLbl, &lv_font_montserrat_12, 0);
+        lv_obj_align(statusLbl, LV_ALIGN_BOTTOM_RIGHT, 0, 1);
+        applyStatusGlyph(statusLbl, msg.status);
         _statusLabels.push_back(statusLbl);
         _textLabels.push_back(lbl);
     } else {
@@ -314,16 +308,7 @@ void LvMessageView::updateMessageStatus(int msgIdx, LXMFStatus status) {
     lv_obj_t* textLbl = _textLabels[msgIdx];
     if (!statusLbl) return;  // Incoming message, no status label
 
-    // Update status indicator
-    const char* ind = "~";
-    uint32_t indColor = Theme::TEXT_MUTED;
-    if (status == LXMFStatus::SENT || status == LXMFStatus::DELIVERED) {
-        ind = "*"; indColor = Theme::SUCCESS;
-    } else if (status == LXMFStatus::FAILED) {
-        ind = "!"; indColor = Theme::ERROR_CLR;
-    }
-    lv_obj_set_style_text_color(statusLbl, lv_color_hex(indColor), 0);
-    lv_label_set_text(statusLbl, ind);
+    applyStatusGlyph(statusLbl, status);
 
     // Update text color to match status
     if (textLbl) {
@@ -335,6 +320,34 @@ void LvMessageView::updateMessageStatus(int msgIdx, LXMFStatus status) {
         }
         lv_obj_set_style_text_color(textLbl, lv_color_hex(textColor), 0);
     }
+}
+
+void LvMessageView::applyStatusGlyph(lv_obj_t* lbl, LXMFStatus status) {
+    if (!lbl) return;
+    const char* glyph;
+    uint32_t color;
+    switch (status) {
+        case LXMFStatus::DELIVERED:
+            glyph = LV_SYMBOL_OK LV_SYMBOL_OK;  // Double check
+            color = Theme::SUCCESS;
+            break;
+        case LXMFStatus::SENT:
+            glyph = LV_SYMBOL_OK;               // Single check
+            color = Theme::TEXT_MUTED;
+            break;
+        case LXMFStatus::FAILED:
+            glyph = LV_SYMBOL_WARNING;
+            color = Theme::ERROR_CLR;
+            break;
+        case LXMFStatus::QUEUED:
+        case LXMFStatus::SENDING:
+        default:
+            glyph = LV_SYMBOL_REFRESH;          // In-flight
+            color = Theme::TEXT_MUTED;
+            break;
+    }
+    lv_label_set_text(lbl, glyph);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
 }
 
 void LvMessageView::sendCurrentMessage() {

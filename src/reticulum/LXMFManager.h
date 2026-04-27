@@ -10,6 +10,7 @@
 #include <functional>
 #include <deque>
 #include <set>
+#include <map>
 
 class LXMFManager {
 public:
@@ -52,6 +53,18 @@ private:
     // Deduplication: recently seen message IDs
     std::set<std::string> _seenMessageIds;
     static constexpr int MAX_SEEN_IDS = 100;
+
+    // Outstanding delivery proofs — keyed by receipt hash hex. The recipient
+    // returns a PROOF packet over RNS for opportunistic and link single
+    // packets; when it arrives, we flip the message to DELIVERED.
+    struct PendingProof {
+        std::string peerHex;
+        double timestamp;
+    };
+    static std::map<std::string, PendingProof> _pendingProofs;
+    static void onProofDelivered(const RNS::PacketReceipt& r);
+    static void onProofTimeout(const RNS::PacketReceipt& r);
+    void registerProofTracking(RNS::PacketReceipt& receipt, const LXMFMessage& msg);
 
     static LXMFManager* _instance;
 };

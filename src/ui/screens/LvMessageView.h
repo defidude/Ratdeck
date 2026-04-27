@@ -45,6 +45,7 @@ private:
     std::vector<LXMFMessage> _cachedMsgs;
 
     void updateMessageStatus(int msgIdx, LXMFStatus status);
+    static void applyStatusGlyph(lv_obj_t* lbl, LXMFStatus status);
 
     // LVGL widgets
     lv_obj_t* _header = nullptr;

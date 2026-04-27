@@ -177,6 +177,25 @@ void LvSettingsScreen::buildItems() {
         _items.push_back(newId);
         idx++;
     }
+    if (_sd && _sd->isReady()) {
+        SettingItem importId;
+        importId.label = "Import Identity";
+        importId.type = SettingType::ACTION;
+        importId.formatter = [](int) { return String("[Enter]"); };
+        importId.action = [this, &s]() {
+            if (!_sd->exists(SD_PATH_IMPORT_ID)) { if (_ui) _ui->lvStatusBar().showToast("Place identity file on SD card!", 1200); return; }
+            if (!_idMgr) { if (_ui) _ui->lvStatusBar().showToast("Not available", 1200); return; }
+            if (_idMgr->count() >= 8) { if (_ui) _ui->lvStatusBar().showToast("Max 8 identities!", 1200); return; }
+            int idx = _idMgr->importIdentity(s.displayName);
+            if (idx >= 0) {
+                if (_ui) _ui->lvStatusBar().showToast("Identity created!", 1200);
+                buildItems();
+                rebuildCategoryList();
+            }
+        };
+        _items.push_back(importId);
+        idx++;
+    }
     _items.push_back({"Announce Interval", SettingType::INTEGER,
         [&s]() { return s.announceInterval; }, [&s](int v) { s.announceInterval = v; },
         [](int v) { return String(v) + "m"; }, 5, 60 * 6, 5}); // 5m - 6h

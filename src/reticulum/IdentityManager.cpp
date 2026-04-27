@@ -45,6 +45,35 @@ String IdentityManager::slotKeyPath(int slotNum) const {
     return String(path);
 }
 
+int IdentityManager::importIdentity(const String& displayName) {
+    if ((int)_slots.size() >= MAX_IDENTITIES) return -1;
+
+    // Generate new identity
+    RNS::Identity newId;
+    uint8_t buffer[64];
+    size_t bytesRead;
+    bool isReadOk = _sd->readFile("/ratdeck/identity/import.key", buffer, 64, bytesRead);
+    if (!isReadOk || bytesRead < 64) return -1;
+    RNS::Bytes privKey = RNS::Bytes(buffer, 64);
+
+    int slotNum = (int)_slots.size();
+    String keyPath = slotKeyPath(slotNum);
+
+    // Save key file
+    _flash->writeAtomic(keyPath.c_str(), privKey.data(), privKey.size());
+
+    IdentitySlot slot;
+    slot.hash = newId.hexhash();
+    slot.displayName = "";  // New identity starts unnamed
+    slot.keyPath = keyPath;
+    slot.active = false;
+    _slots.push_back(slot);
+
+    saveSlotMeta();
+    Serial.printf("[IDMGR] Created identity %d: %s\n", slotNum, slot.hash.substr(0, 16).c_str());
+    return slotNum;
+}
+
 int IdentityManager::createIdentity(const String& displayName) {
     if ((int)_slots.size() >= MAX_IDENTITIES) return -1;
 

@@ -31,17 +31,50 @@ bool TCPClientInterface::start() {
 
 void TCPClientInterface::stop() {
     _online = false;
+    // If a connect attempt is in flight, wait for it before tearing down
+    // _client — the task is the only thread allowed to touch _client during
+    // CS_CONNECTING.
+    waitForConnectTask();
     if (_client.connected()) {
         _client.stop();
         Serial.printf("[TCP] Disconnected from %s:%d\n", _host.c_str(), _port);
     }
 }
 
-void TCPClientInterface::tryConnect() {
-    _lastAttempt = millis();
-    Serial.printf("[TCP] Connecting to %s:%d...\n", _host.c_str(), _port);
+void TCPClientInterface::waitForConnectTask() {
+    while (_connectState == CS_CONNECTING) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    // Task self-deletes; clear the handle once we've observed it finish.
+    _connectTask = nullptr;
+}
 
-    if (_client.connect(_host.c_str(), _port, TCP_CONNECT_TIMEOUT_MS)) {
+void TCPClientInterface::connectTaskFn(void* arg) {
+    auto* self = static_cast<TCPClientInterface*>(arg);
+    bool ok = self->_client.connect(self->_host.c_str(), self->_port, TCP_CONNECT_TIMEOUT_MS);
+    self->_connectState = ok ? CS_CONNECTED : CS_FAILED;
+    vTaskDelete(NULL);
+}
+
+void TCPClientInterface::tryConnect() {
+    if (_connectState == CS_CONNECTING) return;
+    _lastAttempt = millis();
+    _connectState = CS_CONNECTING;
+    Serial.printf("[TCP] Connecting to %s:%d (async)...\n", _host.c_str(), _port);
+    BaseType_t ok = xTaskCreate(connectTaskFn, "tcpconn", 4096, this, 1, &_connectTask);
+    if (ok != pdPASS) {
+        _connectState = CS_IDLE;
+        Serial.printf("[TCP] Failed to spawn connect task for %s:%d\n", _host.c_str(), _port);
+    }
+}
+
+void TCPClientInterface::loop() {
+    if (!_online) return;
+
+    // Claim async connect results
+    if (_connectState == CS_CONNECTED) {
+        _connectState = CS_IDLE;
+        _connectTask = nullptr;
         // Reset HDLC frame state and hub discovery for new connection
         _inFrame = false;
         _escaped = false;
@@ -55,13 +88,15 @@ void TCPClientInterface::tryConnect() {
         _client.setNoDelay(true);  // Disable Nagle — send immediately
 
         Serial.printf("[TCP] Connected to %s:%d\n", _host.c_str(), _port);
-    } else {
+    } else if (_connectState == CS_FAILED) {
+        _connectState = CS_IDLE;
+        _connectTask = nullptr;
         Serial.printf("[TCP] Failed to connect to %s:%d\n", _host.c_str(), _port);
     }
-}
 
-void TCPClientInterface::loop() {
-    if (!_online) return;
+    // While the connect task is running, the main loop must not touch
+    // _client (Arduino's WiFiClient is not safe for concurrent access).
+    if (_connectState == CS_CONNECTING) return;
 
     // Auto-reconnect (only if WiFi is connected)
     if (!_client.connected()) {
@@ -127,6 +162,11 @@ void TCPClientInterface::loop() {
 void TCPClientInterface::send_outgoing(const RNS::Bytes& data) {
     if (!_online) {
         Serial.printf("[TCP] TX BLOCKED (offline) %d bytes to %s:%d\n", (int)data.size(), _host.c_str(), _port);
+        return;
+    }
+    // _client is owned by the connect task while CS_CONNECTING — don't touch it
+    if (_connectState == CS_CONNECTING) {
+        Serial.printf("[TCP] TX BLOCKED (connecting) %d bytes to %s:%d\n", (int)data.size(), _host.c_str(), _port);
         return;
     }
     if (!_client.connected()) {

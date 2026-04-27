@@ -4,6 +4,8 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <vector>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 class TCPClientInterface : public RNS::InterfaceImpl {
 public:
@@ -18,7 +20,10 @@ public:
         return "TCPClient[" + _name + "]";
     }
 
-    bool isConnected() { return _client.connected(); }
+    bool isConnected() {
+        if (_connectState == CS_CONNECTING) return false;
+        return _client.connected();
+    }
     const String& host() const { return _host; }
     uint16_t port() const { return _port; }
 
@@ -29,6 +34,18 @@ private:
     void tryConnect();
     void sendFrame(const uint8_t* data, size_t len);
     int readFrame();
+    static void connectTaskFn(void* arg);
+    void waitForConnectTask();
+
+    // _client.connect() blocks; run it in a one-shot task and observe via _connectState.
+    enum ConnectState : uint8_t {
+        CS_IDLE       = 0,
+        CS_CONNECTING = 1,
+        CS_CONNECTED  = 2,  // task done, main loop must claim
+        CS_FAILED     = 3,  // task done, main loop must claim
+    };
+    volatile ConnectState _connectState = CS_IDLE;
+    TaskHandle_t _connectTask = nullptr;
 
     WiFiClient _client;
     String _host;

@@ -315,16 +315,17 @@ void LvSettingsScreen::buildItems() {
         idx++;
         _items.push_back({"Bandwidth", SettingType::ENUM_CHOICE,
             [&s]() {
-                if (s.loraBW <= 62500)  return 0;
-                if (s.loraBW <= 125000) return 1;
-                if (s.loraBW <= 250000) return 2;
-                return 3;
+                if (s.loraBW <= 41700)  return 0;
+                if (s.loraBW <= 62500)  return 1;
+                if (s.loraBW <= 125000) return 2;
+                if (s.loraBW <= 250000) return 3;
+                return 4;
             },
             [&s](int v) {
-                static const uint32_t bws[] = {62500, 125000, 250000, 500000};
-                s.loraBW = bws[constrain(v, 0, 3)];
+                static const uint32_t bws[] = {41700, 62500, 125000, 250000, 500000};
+                s.loraBW = bws[constrain(v, 0, 4)];
             },
-            nullptr, 0, 3, 1, {"62.5k", "125k", "250k", "500k"}});
+            nullptr, 0, 4, 1, {"41.7k", "62.5k", "125k", "250k", "500k"}});
         idx++;
         _items.push_back({"Coding Rate", SettingType::INTEGER,
             [&s]() { return s.loraCR; }, [&s](int v) { s.loraCR = v; },

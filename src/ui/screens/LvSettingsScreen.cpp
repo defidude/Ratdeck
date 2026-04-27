@@ -192,6 +192,9 @@ void LvSettingsScreen::buildItems() {
                 buildItems();
                 rebuildCategoryList();
             }
+            else {
+                if (_ui) _ui->lvStatusBar().showToast("Identity import failed!", 1200);
+            }
         };
         _items.push_back(importId);
         idx++;

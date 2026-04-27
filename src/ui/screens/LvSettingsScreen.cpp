@@ -353,22 +353,40 @@ void LvSettingsScreen::buildItems() {
         [&s](int v) { s.wifiMode = (RatWiFiMode)v; },
         nullptr, 0, 2, 1, {"OFF", "AP", "STA"}});
     idx++;
-    {
+    // Static label storage — SettingItem holds const char*, so the buffers
+    // must outlive each buildItems() call.
+    static char ssidLbls[WIFI_STA_MAX_NETWORKS][24];
+    static char passLbls[WIFI_STA_MAX_NETWORKS][28];
+    for (size_t slot = 0; slot < WIFI_STA_MAX_NETWORKS; slot++) {
+        snprintf(ssidLbls[slot], sizeof(ssidLbls[slot]), "WiFi %u SSID", (unsigned)(slot + 1));
+        snprintf(passLbls[slot], sizeof(passLbls[slot]), "WiFi %u Password", (unsigned)(slot + 1));
+
         SettingItem ssidItem;
-        ssidItem.label = "WiFi SSID";
+        ssidItem.label = ssidLbls[slot];
         ssidItem.type = SettingType::TEXT_INPUT;
-        ssidItem.textGetter = [&s]() { return s.wifiSTASSID; };
-        ssidItem.textSetter = [&s](const String& v) { s.wifiSTASSID = v; };
+        ssidItem.textGetter = [&s, slot]() {
+            return slot < s.wifiSTANetworks.size() ? s.wifiSTANetworks[slot].ssid : String("");
+        };
+        ssidItem.textSetter = [&s, slot](const String& v) {
+            // Don't compact mid-edit: keep slot positions stable while the
+            // user is filling fields. Empty entries get filtered on serialize.
+            while (s.wifiSTANetworks.size() <= slot) s.wifiSTANetworks.push_back({});
+            s.wifiSTANetworks[slot].ssid = v;
+        };
         ssidItem.maxTextLen = 32;
         _items.push_back(ssidItem);
         idx++;
-    }
-    {
+
         SettingItem passItem;
-        passItem.label = "WiFi Password";
+        passItem.label = passLbls[slot];
         passItem.type = SettingType::TEXT_INPUT;
-        passItem.textGetter = [&s]() { return s.wifiSTAPassword; };
-        passItem.textSetter = [&s](const String& v) { s.wifiSTAPassword = v; };
+        passItem.textGetter = [&s, slot]() {
+            return slot < s.wifiSTANetworks.size() ? s.wifiSTANetworks[slot].password : String("");
+        };
+        passItem.textSetter = [&s, slot](const String& v) {
+            while (s.wifiSTANetworks.size() <= slot) s.wifiSTANetworks.push_back({});
+            s.wifiSTANetworks[slot].password = v;
+        };
         passItem.maxTextLen = 32;
         _items.push_back(passItem);
         idx++;
@@ -1013,7 +1031,24 @@ void LvSettingsScreen::rebuildWifiList() {
             int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
             if (idx < (int)self->_wifiResults.size()) {
                 auto& net = self->_wifiResults[idx];
-                if (self->_cfg) { self->_cfg->settings().wifiSTASSID = net.ssid; self->applyAndSave(); }
+                if (self->_cfg) {
+                    auto& nets = self->_cfg->settings().wifiSTANetworks;
+                    bool dup = false;
+                    for (auto& n : nets) { if (!n.ssid.isEmpty() && n.ssid == net.ssid) { dup = true; break; } }
+                    if (dup) {
+                        if (self->_ui) self->_ui->lvStatusBar().showToast("Already saved", 1200);
+                    } else {
+                        bool placed = false;
+                        for (auto& n : nets) {
+                            if (n.ssid.isEmpty()) { n.ssid = net.ssid; n.password = ""; placed = true; break; }
+                        }
+                        if (!placed && nets.size() < WIFI_STA_MAX_NETWORKS) {
+                            WiFiNetwork w; w.ssid = net.ssid; nets.push_back(w); placed = true;
+                        }
+                        if (placed) self->applyAndSave();
+                        else if (self->_ui) self->_ui->lvStatusBar().showToast("Network slots full", 1500);
+                    }
+                }
             }
             self->_view = SettingsView::ITEM_LIST;
             self->rebuildItemList();
@@ -1319,7 +1354,24 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
                     int idx = (int)(intptr_t)lv_obj_get_user_data(focused);
                     if (idx < (int)_wifiResults.size()) {
                         auto& net = _wifiResults[idx];
-                        if (_cfg) { _cfg->settings().wifiSTASSID = net.ssid; applyAndSave(); }
+                        if (_cfg) {
+                            auto& nets = _cfg->settings().wifiSTANetworks;
+                            bool dup = false;
+                            for (auto& n : nets) { if (!n.ssid.isEmpty() && n.ssid == net.ssid) { dup = true; break; } }
+                            if (dup) {
+                                if (_ui) _ui->lvStatusBar().showToast("Already saved", 1200);
+                            } else {
+                                bool placed = false;
+                                for (auto& n : nets) {
+                                    if (n.ssid.isEmpty()) { n.ssid = net.ssid; n.password = ""; placed = true; break; }
+                                }
+                                if (!placed && nets.size() < WIFI_STA_MAX_NETWORKS) {
+                                    WiFiNetwork w; w.ssid = net.ssid; nets.push_back(w); placed = true;
+                                }
+                                if (placed) applyAndSave();
+                                else if (_ui) _ui->lvStatusBar().showToast("Network slots full", 1500);
+                            }
+                        }
                     }
                 }
                 _view = SettingsView::ITEM_LIST;
@@ -1341,8 +1393,7 @@ void LvSettingsScreen::snapshotRebootSettings() {
     if (!_cfg) return;
     auto& s = _cfg->settings();
     _rebootSnap.wifiMode = s.wifiMode;
-    _rebootSnap.wifiSTASSID = s.wifiSTASSID;
-    _rebootSnap.wifiSTAPassword = s.wifiSTAPassword;
+    _rebootSnap.wifiSTANetworks = s.wifiSTANetworks;
     _rebootSnap.bleEnabled = s.bleEnabled;
     _rebootSnap.autoIfaceEnabled = s.autoIfaceEnabled;
     _gpsSnapEnabled = s.gpsTimeEnabled;
@@ -1351,11 +1402,15 @@ void LvSettingsScreen::snapshotRebootSettings() {
 bool LvSettingsScreen::rebootSettingsChanged() const {
     if (!_cfg) return false;
     auto& s = _cfg->settings();
-    return s.wifiMode != _rebootSnap.wifiMode
-        || s.wifiSTASSID != _rebootSnap.wifiSTASSID
-        || s.wifiSTAPassword != _rebootSnap.wifiSTAPassword
-        || s.bleEnabled != _rebootSnap.bleEnabled
-        || s.autoIfaceEnabled != _rebootSnap.autoIfaceEnabled;
+    if (s.wifiMode != _rebootSnap.wifiMode) return true;
+    if (s.bleEnabled != _rebootSnap.bleEnabled) return true;
+    if (s.autoIfaceEnabled != _rebootSnap.autoIfaceEnabled) return true;
+    if (s.wifiSTANetworks.size() != _rebootSnap.wifiSTANetworks.size()) return true;
+    for (size_t i = 0; i < s.wifiSTANetworks.size(); i++) {
+        if (s.wifiSTANetworks[i].ssid != _rebootSnap.wifiSTANetworks[i].ssid) return true;
+        if (s.wifiSTANetworks[i].password != _rebootSnap.wifiSTANetworks[i].password) return true;
+    }
+    return false;
 }
 
 void LvSettingsScreen::snapshotTCPSettings() {

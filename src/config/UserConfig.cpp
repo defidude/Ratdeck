@@ -28,8 +28,24 @@ bool UserConfig::parseJson(const String& json) {
     }
     _settings.wifiAPSSID     = doc["wifi_ap_ssid"]     | "";
     _settings.wifiAPPassword = doc["wifi_ap_pass"]     | WIFI_AP_PASSWORD;
-    _settings.wifiSTASSID    = doc["wifi_sta_ssid"]    | "";
-    _settings.wifiSTAPassword = doc["wifi_sta_pass"]   | "";
+
+    // Migrate from legacy wifi_sta_ssid/wifi_sta_pass when array is absent.
+    _settings.wifiSTANetworks.clear();
+    JsonArray staArr = doc["wifi_sta_networks"];
+    if (staArr) {
+        for (JsonObject obj : staArr) {
+            if (_settings.wifiSTANetworks.size() >= WIFI_STA_MAX_NETWORKS) break;
+            WiFiNetwork n;
+            n.ssid = obj["ssid"] | "";
+            n.password = obj["pass"] | "";
+            if (!n.ssid.isEmpty()) _settings.wifiSTANetworks.push_back(n);
+        }
+    } else {
+        WiFiNetwork legacy;
+        legacy.ssid = doc["wifi_sta_ssid"] | "";
+        legacy.password = doc["wifi_sta_pass"] | "";
+        if (!legacy.ssid.isEmpty()) _settings.wifiSTANetworks.push_back(legacy);
+    }
 
     // AutoInterface (LAN auto-discovery)
     _settings.autoIfaceEnabled  = doc["autoiface_en"]    | false;
@@ -95,8 +111,14 @@ String UserConfig::serializeToJson() const {
     doc["wifi_mode"] = (int)_settings.wifiMode;
     doc["wifi_ap_ssid"] = _settings.wifiAPSSID;
     doc["wifi_ap_pass"] = _settings.wifiAPPassword;
-    doc["wifi_sta_ssid"] = _settings.wifiSTASSID;
-    doc["wifi_sta_pass"] = _settings.wifiSTAPassword;
+
+    JsonArray staArr = doc["wifi_sta_networks"].to<JsonArray>();
+    for (auto& n : _settings.wifiSTANetworks) {
+        if (n.ssid.isEmpty()) continue;
+        JsonObject obj = staArr.add<JsonObject>();
+        obj["ssid"] = n.ssid;
+        obj["pass"] = n.password;
+    }
 
     doc["autoiface_en"]    = _settings.autoIfaceEnabled;
     doc["autoiface_group"] = _settings.autoIfaceGroupId;

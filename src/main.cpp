@@ -46,6 +46,7 @@
 #include "reticulum/IdentityManager.h"
 #include "transport/LoRaInterface.h"
 #include "transport/WiFiInterface.h"
+#include <WiFiMulti.h>
 #include "transport/TCPClientInterface.h"
 #include "transport/BLEInterface.h"
 #include "transport/AutoInterfaceWrapper.h"
@@ -122,6 +123,7 @@ bool radioOnline = false;
 bool bootComplete = false;
 bool bootLoopRecovery = false;
 bool wifiSTAStarted = false;
+WiFiMulti wifiMulti;
 bool wifiSTAConnected = false;
 unsigned long lastAutoAnnounce = 0;
 
@@ -667,20 +669,26 @@ void setup() {
         ui.lvStatusBar().setWiFiActive(true);
     } else if (wifiMode == RAT_WIFI_STA) {
         lvBootScreen.setProgress(0.87f, "WiFi STA starting...");
-        // WiFi is enabled but not yet connected — indicator will be yellow
-        if (!userConfig.settings().wifiSTASSID.isEmpty()) {
+        auto& nets = userConfig.settings().wifiSTANetworks;
+        int registered = 0;
+        for (auto& n : nets) {
+            if (n.ssid.isEmpty()) continue;
+            wifiMulti.addAP(n.ssid.c_str(), n.password.c_str());
+            registered++;
+        }
+        if (registered > 0) {
             WiFi.mode(WIFI_STA);
+            // Drive reconnects from onWiFiEvent + main loop with backoff.
             WiFi.onEvent(onWiFiEvent);
-            // AutoInterface needs an IPv6 link-local address.  Must be enabled
-            // BEFORE WiFi.begin() so SLAAC starts on STA association.
+            // AutoInterface needs an IPv6 link-local address. Must be enabled
+            // before the first association so SLAAC starts in time.
             if (userConfig.settings().autoIfaceEnabled) {
                 WiFi.enableIpV6();
                 Serial.println("[WIFI] IPv6 enabled (AutoInterface ON)");
             }
-            WiFi.begin(userConfig.settings().wifiSTASSID.c_str(),
-                       userConfig.settings().wifiSTAPassword.c_str());
+            wifiMulti.run(5000);
             wifiSTAStarted = true;
-            Serial.printf("[WIFI] STA: %s\n", userConfig.settings().wifiSTASSID.c_str());
+            Serial.printf("[WIFI] STA: %d saved network(s) registered\n", registered);
         }
     } else {
         lvBootScreen.setProgress(0.87f, "WiFi disabled");
@@ -1085,8 +1093,7 @@ void loop() {
             (long)(millis() - wifiReconnectAt) >= 0) {
             wifiNeedsReconnect = false;
             Serial.printf("[WIFI] Reconnect attempt #%u\n", (unsigned)wifiReconnectAttempt);
-            WiFi.begin(userConfig.settings().wifiSTASSID.c_str(),
-                       userConfig.settings().wifiSTAPassword.c_str());
+            wifiMulti.run(2000);
         }
         bool connected = (WiFi.status() == WL_CONNECTED);
         if (connected && !wifiSTAConnected) {

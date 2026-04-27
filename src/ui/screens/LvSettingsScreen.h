@@ -152,8 +152,7 @@ private:
     bool _rebootNeeded = false;
     struct RebootSnapshot {
         RatWiFiMode wifiMode;
-        String wifiSTASSID;
-        String wifiSTAPassword;
+        std::vector<WiFiNetwork> wifiSTANetworks;
         bool bleEnabled;
         bool autoIfaceEnabled;
     };

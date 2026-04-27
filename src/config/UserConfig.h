@@ -10,6 +10,13 @@
 
 enum RatWiFiMode : uint8_t { RAT_WIFI_OFF = 0, RAT_WIFI_AP = 1, RAT_WIFI_STA = 2 };
 
+struct WiFiNetwork {
+    String ssid;
+    String password;
+};
+
+constexpr size_t WIFI_STA_MAX_NETWORKS = 3;
+
 struct TCPEndpoint {
     String host;
     uint16_t port = TCP_DEFAULT_PORT;
@@ -30,8 +37,8 @@ struct UserSettings {
     RatWiFiMode wifiMode = RAT_WIFI_STA;
     String wifiAPSSID;
     String wifiAPPassword = WIFI_AP_PASSWORD;
-    String wifiSTASSID;
-    String wifiSTAPassword;
+
+    std::vector<WiFiNetwork> wifiSTANetworks;
 
     // AutoInterface (Reticulum LAN auto-discovery via IPv6 multicast).
     // Active only in STA mode; opt-in until proven stable on real APs.

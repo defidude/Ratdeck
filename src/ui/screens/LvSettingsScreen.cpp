@@ -96,10 +96,10 @@ void LvSettingsScreen::buildItems() {
         [](int) { return String(RATDECK_VERSION_STRING); }});
     idx++;
     _items.push_back({"LXMF Addr", SettingType::READONLY, nullptr, nullptr,
-        [this](int) { return _destinationHash.length() > 0 ? _destinationHash.substring(0, 16) : String("unknown"); }});
+        [this](int) { return _destinationHash.length() > 0 ? _destinationHash : String("unknown"); }});
     idx++;
     _items.push_back({"Identity", SettingType::READONLY, nullptr, nullptr,
-        [this](int) { return _identityHash.substring(0, 16); }});
+        [this](int) { return _identityHash; }});
     idx++;
     {
         SettingItem nameItem;

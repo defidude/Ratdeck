@@ -196,10 +196,14 @@ void LvMessageView::appendMessage(const LXMFMessage& msg) {
     const lv_font_t* font = &lv_font_ratdeck_12;
     int maxBubbleW = Theme::CONTENT_W * 3 / 4;
 
-    // Bubble container
+    // Bubble container. Reserve pad_bottom for the timestamp row so the
+    // bubble's allocated height in the flex scroll includes it — without
+    // this, the time renders into the row gap and looks like it's hanging
+    // outside the bubble.
     lv_obj_t* bubble = lv_obj_create(_msgScroll);
     lv_obj_set_width(bubble, Theme::CONTENT_W - 12);
     lv_obj_set_style_pad_all(bubble, 0, 0);
+    lv_obj_set_style_pad_bottom(bubble, 14, 0);
     lv_obj_set_style_bg_opa(bubble, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bubble, 0, 0);
     lv_obj_clear_flag(bubble, LV_OBJ_FLAG_SCROLLABLE);
@@ -216,10 +220,10 @@ void LvMessageView::appendMessage(const LXMFMessage& msg) {
 
     if (msg.incoming) {
         lv_obj_set_style_bg_color(box, lv_color_hex(Theme::MSG_IN_BG), 0);
-        lv_obj_align(box, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_align(box, LV_ALIGN_TOP_LEFT, 0, 0);
     } else {
         lv_obj_set_style_bg_color(box, lv_color_hex(Theme::MSG_OUT_BG), 0);
-        lv_obj_align(box, LV_ALIGN_RIGHT_MID, 0, 0);
+        lv_obj_align(box, LV_ALIGN_TOP_RIGHT, 0, 0);
     }
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
 

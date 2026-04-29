@@ -5,6 +5,7 @@
 #include <time.h>
 
 LXMFManager* LXMFManager::_instance = nullptr;
+std::map<std::string, LXMFManager::PendingProof> LXMFManager::_pendingProofs;
 
 bool LXMFManager::begin(ReticulumManager* rns, MessageStore* store) {
     _rns = rns; _store = store; _instance = this;
@@ -173,9 +174,14 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
                           (int)linkBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
             RNS::Packet packet(_outLink, linkBytes);
             RNS::PacketReceipt receipt = packet.send();
-            if (receipt) { sent = true; }
+            if (receipt) { sent = true; registerProofTracking(receipt, msg); }
         } else {
-            // Too large for single packet — use Resource transfer (chunked)
+            // Too large for single packet — use Resource transfer (chunked).
+            // No DELIVERED transition for this path: microReticulum's Transport
+            // skips receipt generation for RESOURCE-context packets, and
+            // Link::start_resource_transfer doesn't surface a concluded
+            // callback. Message stays at SENT. lxmf-py wires this via
+            // Resource.set_callback — port that when the lib exposes it.
             Serial.printf("[LXMF] sending via link resource: %d bytes to %s\n",
                           (int)linkBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
             if (_outLink.start_resource_transfer(linkBytes)) {
@@ -200,7 +206,7 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
                           (int)payloadBytes.size(), outDest.hash().toHex().substr(0, 12).c_str());
             RNS::Packet packet(outDest, payloadBytes);
             RNS::PacketReceipt receipt = packet.send();
-            if (receipt) { sent = true; }
+            if (receipt) { sent = true; registerProofTracking(receipt, msg); }
         } else {
             // Too large for single frame — need link + resource transfer
             Serial.printf("[LXMF] Message needs link delivery (%d bytes > %d single-frame), retry %d\n",
@@ -354,4 +360,39 @@ const ConversationSummary* LXMFManager::getConversationSummary(const std::string
 
 void LXMFManager::markRead(const std::string& peerHex) {
     if (_store) { _store->markConversationRead(peerHex); }
+}
+
+void LXMFManager::registerProofTracking(RNS::PacketReceipt& receipt, const LXMFMessage& msg) {
+    if (!receipt) return;
+    std::string rh = receipt.hash().toHex();
+    _pendingProofs[rh] = { msg.destHash.toHex(), msg.timestamp };
+    receipt.set_delivery_callback(&LXMFManager::onProofDelivered);
+    receipt.set_timeout(60);
+    receipt.set_timeout_callback(&LXMFManager::onProofTimeout);
+}
+
+void LXMFManager::onProofDelivered(const RNS::PacketReceipt& r) {
+    if (!_instance) return;
+    std::string rh = r.hash().toHex();
+    auto it = _pendingProofs.find(rh);
+    if (it == _pendingProofs.end()) return;
+    PendingProof p = it->second;
+    _pendingProofs.erase(it);
+
+    if (_instance->_store) {
+        _instance->_store->updateMessageStatus(p.peerHex, p.timestamp, false, LXMFStatus::DELIVERED);
+    }
+    if (_instance->_statusCb) {
+        _instance->_statusCb(p.peerHex, p.timestamp, LXMFStatus::DELIVERED);
+    }
+    Serial.printf("[LXMF] DELIVERED proof for %s @ %.0f\n",
+                  p.peerHex.substr(0, 12).c_str(), p.timestamp);
+}
+
+void LXMFManager::onProofTimeout(const RNS::PacketReceipt& r) {
+    // No proof within window — leave status as SENT (over LoRa, lack of
+    // proof doesn't mean undelivered). Just clear the pending entry so the
+    // map doesn't leak.
+    if (!_instance) return;
+    _pendingProofs.erase(r.hash().toHex());
 }

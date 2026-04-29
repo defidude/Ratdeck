@@ -4,6 +4,7 @@
 #include "storage/SDStore.h"
 #include "storage/FlashStore.h"
 #include "transport/LoRaInterface.h"
+#include "audio/AudioNotify.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
@@ -98,6 +99,7 @@ AnnounceManager::AnnounceManager(const char* aspectFilter) : RNS::AnnounceHandle
 }
 
 void AnnounceManager::setStorage(SDStore* sd, FlashStore* flash) { _sd = sd; _flash = flash; }
+void AnnounceManager::setAudio(AudioNotify* audio) { _audio = audio; }
 
 void AnnounceManager::received_announce(
     const RNS::Bytes& destination_hash,
@@ -142,6 +144,7 @@ void AnnounceManager::received_announce(
         if (++_globalAnnounceCount > MAX_GLOBAL_ANNOUNCES_PER_SEC) return;
     }
 
+
     std::string key = makeKey(destination_hash);
     std::string idHex = announced_identity ? announced_identity.hexhash() : "";
 
@@ -167,8 +170,11 @@ void AnnounceManager::received_announce(
                 _nameCacheDirty = true;
             }
         }
+        _audio->playAnnounce(true);
         return;
     }
+
+    _audio->playAnnounce(false);
 
     // New node — toHex needed for log + name cache
     std::string destHex = destination_hash.toHex();

@@ -70,7 +70,10 @@ bool UserConfig::parseJson(const String& json) {
     _settings.timezoneSet        = doc["tz_set"]       | false;
     _settings.use24HourTime      = doc["time_24h"]     | false;
 
-    _settings.audioEnabled = doc["audio_on"]  | true;
+    _settings.audioBootEnabled = doc["audio_boot_on"]  | true;
+    _settings.audioMsgEnabled = doc["audio_msg_on"]  | true;
+    _settings.audioAnnounceEnabled = doc["audio_announce_on"]  | true;
+    _settings.audioErrorEnabled = doc["audio_error_on"]  | true;
     _settings.audioVolume  = doc["audio_vol"] | 80;
 
     _settings.displayName = doc["display_name"] | "";
@@ -127,7 +130,9 @@ String UserConfig::serializeToJson() const {
     doc["tz_set"]       = _settings.timezoneSet;
     doc["time_24h"]     = _settings.use24HourTime;
 
-    doc["audio_on"]  = _settings.audioEnabled;
+    doc["audio_boot_on"]  = _settings.audioBootEnabled;
+    doc["audio_msg_on"]  = _settings.audioMsgEnabled;
+    doc["audio_announce_on"]  = _settings.audioAnnounceEnabled;
     doc["audio_vol"] = _settings.audioVolume;
 
     doc["display_name"] = _settings.displayName;

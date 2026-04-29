@@ -11,6 +11,7 @@
 class SDStore;
 class FlashStore;
 class LoRaInterface;
+class AudioNotify;
 
 struct DiscoveredNode {
     RNS::Bytes hash;
@@ -34,6 +35,7 @@ public:
         const RNS::Bytes& app_data) override;
 
     void setStorage(SDStore* sd, FlashStore* flash);
+    void setAudio(AudioNotify* audio);
     void setLoRaInterface(LoRaInterface* li) { _loraIf = li; }
     void setLocalDestHash(const RNS::Bytes& hash) { _localDestHash = hash; }
     void saveContacts();
@@ -63,6 +65,7 @@ private:
 
     std::vector<DiscoveredNode> _nodes;
     SDStore* _sd = nullptr;
+    AudioNotify* _audio = nullptr;
     FlashStore* _flash = nullptr;
     LoRaInterface* _loraIf = nullptr;
     RNS::Bytes _localDestHash;

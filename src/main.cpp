@@ -549,6 +549,7 @@ void setup() {
     // nomadnetwork.node, etc.) from the same peer as separate "doubled" entries.
     announceManager = new AnnounceManager("lxmf.delivery");
     announceManager->setStorage(&sdStore, &flash);
+    announceManager->setAudio(&audio);
     announceManager->setLocalDestHash(rns.destination().hash());
     if (rns.loraInterface()) announceManager->setLoRaInterface(rns.loraInterface());
     announceManager->loadContacts();
@@ -700,7 +701,10 @@ void setup() {
     // Step 25: Audio init
     lvBootScreen.setProgress(0.94f, "Audio...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
-    audio.setEnabled(userConfig.settings().audioEnabled);
+    audio.setBootEnabled(userConfig.settings().audioBootEnabled);
+    audio.setMsgEnabled(userConfig.settings().audioMsgEnabled);
+    audio.setAnnounceEnabled(userConfig.settings().audioAnnounceEnabled);
+    audio.setErrorEnabled(userConfig.settings().audioErrorEnabled);
     audio.setVolume(userConfig.settings().audioVolume);
     audio.begin();
 

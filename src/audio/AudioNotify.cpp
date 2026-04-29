@@ -53,7 +53,7 @@ void AudioNotify::end() {
 }
 
 void AudioNotify::writeTone(uint16_t freq, uint16_t durationMs) {
-    if (!_enabled || !_i2sReady) return;
+    if (!_i2sReady) return;
 
     int numSamples = (AUDIO_SAMPLE_RATE * durationMs) / 1000;
     int16_t* buf = (int16_t*)ps_malloc(numSamples * sizeof(int16_t));
@@ -95,21 +95,21 @@ void AudioNotify::writeSilence(uint16_t durationMs) {
 }
 
 void AudioNotify::playMessage() {
-    if (!_enabled) return;
+    if (!_msg_enabled) return;
     writeTone(1000, 50);
     writeSilence(50);
     writeTone(1000, 50);
     writeSilence(30);
 }
 
-void AudioNotify::playAnnounce() {
-    if (!_enabled) return;
+void AudioNotify::playAnnounce(bool update) {
+    if (!_announce_enabled) return;
     writeTone(800, 30);
     writeSilence(20);
 }
 
 void AudioNotify::playError() {
-    if (!_enabled) return;
+    if (!_error_enabled) return;
     for (int i = 0; i < 3; i++) {
         writeTone(400, 100);
         if (i < 2) writeSilence(50);
@@ -118,7 +118,7 @@ void AudioNotify::playError() {
 }
 
 void AudioNotify::playBoot() {
-    if (!_enabled || !_i2sReady) return;
+    if (!_boot_enabled || !_i2sReady) return;
 
     // === RATDECK BOOT SEQUENCE ===
     // Sci-fi computer startup: sweep -> digital arpeggio -> confirmation

@@ -185,6 +185,9 @@ int LvMessagesScreen::getFocusedPeerIdx() const {
 
 bool LvMessagesScreen::handleLongPress() {
     if (!_lxmf) return false;
+    // Only consume long-press once the user has actively navigated into
+    // the list. Otherwise let main.cpp blank the screen.
+    if (!_focusActive) return false;
     int idx = getFocusedPeerIdx();
     if (idx < 0 || idx >= (int)_sortedPeers.size()) return false;
     _lpPeerIdx = idx;

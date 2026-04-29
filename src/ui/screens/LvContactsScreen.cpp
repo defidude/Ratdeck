@@ -119,6 +119,9 @@ void LvContactsScreen::rebuildList() {
 
 bool LvContactsScreen::handleLongPress() {
     if (!_am || _contactIndices.empty()) return false;
+    // Only consume long-press once the user has actively navigated into
+    // the list. Otherwise let main.cpp blank the screen.
+    if (!_focusActive) return false;
     lv_obj_t* focused = lv_group_get_focused(LvInput::group());
     if (!focused) return false;
     _deleteIdx = (int)(intptr_t)lv_obj_get_user_data(focused);

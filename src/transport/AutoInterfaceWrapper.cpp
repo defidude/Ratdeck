@@ -58,6 +58,13 @@ void AutoInterfaceWrapper::loop() {
 	if (_started && _wrapper) _wrapper.loop();
 }
 
+void AutoInterfaceWrapper::notifyLinkChange(const String& link_local_addr,
+											uint32_t scope_id) {
+	if (!_started || !_impl) return;
+	if (link_local_addr.length() == 0) return;
+	_impl->notify_link_change(link_local_addr.c_str(), scope_id);
+}
+
 bool AutoInterfaceWrapper::isOnline() const {
 	return _started && _wrapper && _wrapper.online();
 }

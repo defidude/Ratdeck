@@ -138,6 +138,7 @@ unsigned long wifiConnectedAt = 0;
 AutoInterfaceWrapper autoIface;
 bool autoIfaceDeferredStart = false;
 unsigned long autoIfaceDeferredAt = 0;
+unsigned long lastAutoIfaceLinkCheck = 0;
 
 // LXMF diagnostic counters (reset each heartbeat)
 static uint32_t diagTcpSkipEvents = 0;
@@ -1127,6 +1128,22 @@ void loop() {
                 autoIfaceDeferredStart = false;
                 Serial.println("[AUTOIFACE] SLAAC timeout — no link-local after 10s");
             }
+        }
+    }
+
+    // 7.7. AutoInterface link-local rotation watch — covers SLAAC privacy
+    // address rotation while STA stays associated.  notify_link_change()
+    // is idempotent in the library, so polling here is cheap (string
+    // compare, no socket churn) and only does real work on actual change.
+    if (autoIface.isOnline() && wifiSTAConnected &&
+        millis() - lastAutoIfaceLinkCheck >= 2000) {
+        lastAutoIfaceLinkCheck = millis();
+        IPv6Address ll = WiFi.localIPv6();
+        bool isLinkLocal = (ll[0] == 0xfe) && ((ll[1] & 0xc0) == 0x80);
+        if (isLinkLocal) {
+            esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            uint32_t scope = sta ? esp_netif_get_netif_impl_index(sta) : 1;
+            autoIface.notifyLinkChange(ll.toString(), scope);
         }
     }
 

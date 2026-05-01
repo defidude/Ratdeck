@@ -42,6 +42,7 @@
 #define SD_PATH_MESSAGES     "/ratdeck/messages"
 #define SD_PATH_CONTACTS     "/ratdeck/contacts"
 #define SD_PATH_IDENTITY     "/ratdeck/identity/identity.key"
+#define SD_PATH_IMPORT_ID    "/ratdeck/identity/import.key"
 
 // --- TCP Client ---
 #define MAX_TCP_CONNECTIONS         4

@@ -54,6 +54,7 @@
 #include "audio/AudioNotify.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <atomic>
 #include <list>
 #include <esp_system.h>
 #include <freertos/task.h>
@@ -123,6 +124,32 @@ bool bootLoopRecovery = false;
 bool wifiSTAStarted = false;
 bool wifiSTAConnected = false;
 unsigned long lastAutoAnnounce = 0;
+
+// STA reconnect: scheduled by onWiFiEvent, fired by loop().
+std::atomic<bool> wifiNeedsReconnect{false};
+std::atomic<unsigned long> wifiReconnectAt{0};
+std::atomic<uint8_t> wifiReconnectAttempt{0};
+constexpr unsigned long WIFI_BACKOFF_MS[4] = {5000, 15000, 60000, 300000};
+
+static void onWiFiEvent(WiFiEvent_t event) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+            uint8_t attempt = wifiReconnectAttempt;
+            uint8_t idx = attempt < 4 ? attempt : 3;
+            wifiReconnectAt = millis() + WIFI_BACKOFF_MS[idx];
+            wifiNeedsReconnect = true;
+            if (attempt < 4) wifiReconnectAttempt = attempt + 1;
+            break;
+        }
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP6:
+            wifiNeedsReconnect = false;
+            wifiReconnectAttempt = 0;
+            break;
+        default:
+            break;
+    }
+}
 unsigned long lastStatusUpdate = 0;
 constexpr unsigned long STATUS_UPDATE_MS = 1000;                // 1 Hz status bar update
 unsigned long lastHeartbeat = 0;
@@ -634,7 +661,7 @@ void setup() {
         // WiFi is enabled but not yet connected — indicator will be yellow
         if (!userConfig.settings().wifiSTASSID.isEmpty()) {
             WiFi.mode(WIFI_STA);
-            WiFi.setAutoReconnect(true);
+            WiFi.onEvent(onWiFiEvent);
             // AutoInterface needs an IPv6 link-local address.  Must be enabled
             // BEFORE WiFi.begin() so SLAAC starts on STA association.
             if (userConfig.settings().autoIfaceEnabled) {
@@ -1045,6 +1072,13 @@ void loop() {
 
     // 7. WiFi STA connection handler
     if (wifiSTAStarted) {
+        if (wifiNeedsReconnect && WiFi.status() != WL_CONNECTED &&
+            (long)(millis() - wifiReconnectAt) >= 0) {
+            wifiNeedsReconnect = false;
+            Serial.printf("[WIFI] Reconnect attempt #%u\n", (unsigned)wifiReconnectAttempt);
+            WiFi.begin(userConfig.settings().wifiSTASSID.c_str(),
+                       userConfig.settings().wifiSTAPassword.c_str());
+        }
         bool connected = (WiFi.status() == WL_CONNECTED);
         if (connected && !wifiSTAConnected) {
             wifiSTAConnected = true;

@@ -1,6 +1,8 @@
 #include "TCPClientInterface.h"
 #include "config/Config.h"
 
+#include <WiFi.h>
+
 TCPClientInterface::TCPClientInterface(const char* host, uint16_t port, const char* name)
     : RNS::InterfaceImpl(name), _host(host), _port(port)
 {
@@ -31,9 +33,9 @@ bool TCPClientInterface::start() {
 
 void TCPClientInterface::stop() {
     _online = false;
-    // If a connect attempt is in flight, wait for it before tearing down
-    // _client — the task is the only thread allowed to touch _client during
-    // CS_CONNECTING.
+    // WiFi down: don't wait for the connect task — it's blocked on a dead
+    // netif and busy-waiting risks TWDT + lwIP panic. The task self-cleans.
+    if (WiFi.status() != WL_CONNECTED) return;
     waitForConnectTask();
     if (_client.connected()) {
         _client.stop();

@@ -130,13 +130,22 @@ std::atomic<bool> wifiNeedsReconnect{false};
 std::atomic<unsigned long> wifiReconnectAt{0};
 std::atomic<uint8_t> wifiReconnectAttempt{0};
 constexpr unsigned long WIFI_BACKOFF_MS[4] = {5000, 15000, 60000, 300000};
+// Floor on the next begin() so lwIP can unwind the netif first.
+constexpr unsigned long WIFI_NETIF_SETTLE_MS = 1500;
 
 static void onWiFiEvent(WiFiEvent_t event) {
     switch (event) {
         case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+            // Our own disconnect() below generates another STA_DISCONNECTED;
+            // ignore it so the deadline doesn't get pushed to the backoff cap.
+            if (wifiNeedsReconnect) break;
+            // Drop the netif and clear stale AP info before the next begin().
+            WiFi.disconnect(false, true);
             uint8_t attempt = wifiReconnectAttempt;
             uint8_t idx = attempt < 4 ? attempt : 3;
-            wifiReconnectAt = millis() + WIFI_BACKOFF_MS[idx];
+            unsigned long backoff = WIFI_BACKOFF_MS[idx];
+            if (backoff < WIFI_NETIF_SETTLE_MS) backoff = WIFI_NETIF_SETTLE_MS;
+            wifiReconnectAt = millis() + backoff;
             wifiNeedsReconnect = true;
             if (attempt < 4) wifiReconnectAttempt = attempt + 1;
             break;

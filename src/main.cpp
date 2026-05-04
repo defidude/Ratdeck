@@ -564,6 +564,11 @@ void setup() {
     ui.lvStatusBar().setLoRaOnline(radioOnline);
     lvBootScreen.setProgress(0.45f, radioOnline ? "Radio online" : "Radio FAILED");
 
+    // Display::begin() left the backlight at 0 to hide an unpainted
+    // framebuffer; the setProgress() above has now flushed the boot screen.
+    // powerMgr at step 24 overrides with the user's configured value.
+    display.setBrightness(128);
+
     // Step 7: Touch HAL — GT911 I2C
     touch.begin();
     lvBootScreen.setProgress(0.50f, "Touch ready");

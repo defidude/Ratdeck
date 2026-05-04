@@ -57,6 +57,7 @@
 #include "audio/AudioNotify.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <atomic>
 #include <list>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
@@ -133,6 +134,43 @@ bool wifiSTAStarted = false;
 WiFiMulti wifiMulti;
 bool wifiSTAConnected = false;
 unsigned long lastAutoAnnounce = 0;
+
+// STA reconnects are scheduled from WiFi events and fired from loop().
+std::atomic<bool> wifiNeedsReconnect{false};
+std::atomic<unsigned long> wifiReconnectAt{0};
+std::atomic<uint8_t> wifiReconnectAttempt{0};
+constexpr unsigned long WIFI_BACKOFF_MS[4] = {5000, 15000, 60000, 300000};
+constexpr unsigned long WIFI_NETIF_SETTLE_MS = 1500;
+
+static void scheduleWiFiReconnect() {
+    uint8_t attempt = wifiReconnectAttempt.load();
+    uint8_t idx = attempt < 4 ? attempt : 3;
+    unsigned long backoff = WIFI_BACKOFF_MS[idx];
+    if (backoff < WIFI_NETIF_SETTLE_MS) backoff = WIFI_NETIF_SETTLE_MS;
+    wifiReconnectAt.store(millis() + backoff);
+    wifiNeedsReconnect.store(true);
+    if (attempt < 4) wifiReconnectAttempt.store(attempt + 1);
+}
+
+static void onWiFiEvent(WiFiEvent_t event) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            // Our own disconnect() below can emit another disconnect event.
+            if (wifiNeedsReconnect.load()) break;
+            scheduleWiFiReconnect();
+            // Drop the netif and clear stale AP info before the next connect.
+            WiFi.disconnect(false, true);
+            break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP6:
+            wifiNeedsReconnect.store(false);
+            wifiReconnectAttempt.store(0);
+            break;
+        default:
+            break;
+    }
+}
+
 unsigned long lastStatusUpdate = 0;
 constexpr unsigned long STATUS_UPDATE_MS = 1000;                // 1 Hz status bar update
 unsigned long lastHeartbeat = 0;
@@ -729,15 +767,19 @@ void setup() {
         // WiFi is enabled but not yet connected — indicator will be yellow
         if (registered > 0) {
             WiFi.mode(WIFI_STA);
-            WiFi.setAutoReconnect(true);
+            WiFi.onEvent(onWiFiEvent);
             // AutoInterface needs an IPv6 link-local address.  Must be enabled
             // BEFORE WiFi.begin() so SLAAC starts on STA association.
             if (userConfig.settings().autoIfaceEnabled) {
                 WiFi.enableIpV6();
                 Serial.println("[WIFI] IPv6 enabled (AutoInterface ON)");
             }
-            wifiMulti.run(5000);
+            uint8_t initialStatus = wifiMulti.run(5000);
             wifiSTAStarted = true;
+            if (initialStatus != WL_CONNECTED && WiFi.status() != WL_CONNECTED &&
+                !wifiNeedsReconnect.load()) {
+                scheduleWiFiReconnect();
+            }
             Serial.printf("[WIFI] STA: %d selected profile registered\n", registered);
         }
     } else {
@@ -1167,6 +1209,17 @@ void loop() {
 
     // 7. WiFi STA connection handler
     if (wifiSTAStarted) {
+        if (wifiNeedsReconnect.load() && WiFi.status() != WL_CONNECTED &&
+            (long)(millis() - wifiReconnectAt.load()) >= 0) {
+            wifiNeedsReconnect.store(false);
+            uint8_t attempt = wifiReconnectAttempt.load();
+            Serial.printf("[WIFI] Reconnect attempt #%u\n", (unsigned)attempt);
+            uint8_t result = wifiMulti.run(2000);
+            if (result != WL_CONNECTED && WiFi.status() != WL_CONNECTED &&
+                !wifiNeedsReconnect.load()) {
+                scheduleWiFiReconnect();
+            }
+        }
         bool connected = (WiFi.status() == WL_CONNECTED);
         if (connected && !wifiSTAConnected) {
             wifiSTAConnected = true;

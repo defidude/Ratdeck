@@ -33,6 +33,8 @@ private:
     bool _focusActive = false;
     int _deleteIdx = -1;
     int _lastContactCount = -1;
+    unsigned long _lastRebuild = 0;
+    static constexpr unsigned long REBUILD_INTERVAL_MS = 30000;
     std::vector<int> _contactIndices;
     std::vector<std::vector<uint8_t>> _avatarBuffers;
 

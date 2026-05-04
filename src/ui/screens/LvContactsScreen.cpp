@@ -50,14 +50,8 @@ std::string compactAge(unsigned long ageMs) {
     return buf;
 }
 
-std::string contactMetaFor(const DiscoveredNode& node, unsigned long ageMs) {
-    std::string age = compactAge(ageMs);
-    if (node.hops > 0 && node.hops < 128) {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "%uH %s", (unsigned)node.hops, age.c_str());
-        return buf;
-    }
-    return age;
+std::string contactMetaFor(unsigned long ageMs) {
+    return compactAge(ageMs);
 }
 
 lv_obj_t* createEmptyState(lv_obj_t* parent) {
@@ -132,15 +126,17 @@ void LvContactsScreen::onEnter() {
 
 void LvContactsScreen::refreshUI() {
     if (!_am) return;
+    unsigned long now = millis();
     int contacts = 0;
     for (const auto& n : _am->nodes()) { if (n.saved) contacts++; }
-    if (contacts != _lastContactCount) {
+    if (contacts != _lastContactCount || now - _lastRebuild >= REBUILD_INTERVAL_MS) {
         rebuildList();
     }
 }
 
 void LvContactsScreen::rebuildList() {
     if (!_am || !_list) return;
+    _lastRebuild = millis();
     _contactIndices.clear();
 
     lv_obj_clean(_list);
@@ -224,7 +220,7 @@ void LvContactsScreen::rebuildList() {
         lv_obj_set_style_text_align(metaLbl, LV_TEXT_ALIGN_RIGHT, 0);
         lv_label_set_long_mode(metaLbl, LV_LABEL_LONG_CLIP);
         lv_obj_set_width(metaLbl, 64);
-        std::string meta = contactMetaFor(node, age);
+        std::string meta = contactMetaFor(age);
         lv_label_set_text(metaLbl, meta.c_str());
         lv_obj_set_pos(metaLbl, Theme::CONTENT_W - 72, 5);
 

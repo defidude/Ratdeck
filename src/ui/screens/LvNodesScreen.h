@@ -71,6 +71,7 @@ private:
 
     unsigned long _lastRebuild = 0;
     static constexpr unsigned long REBUILD_INTERVAL_MS = 5000;
+    static constexpr unsigned long AGE_REBUILD_INTERVAL_MS = 30000;
 
     lv_obj_t* _list = nullptr;
     lv_obj_t* _emptyState = nullptr;

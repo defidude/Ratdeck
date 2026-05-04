@@ -48,19 +48,8 @@ std::string compactAge(unsigned long ageMs) {
     return buf;
 }
 
-std::string hopTextFor(const DiscoveredNode& node) {
-    if (node.hops > 0 && node.hops < 128) {
-        char buf[12];
-        snprintf(buf, sizeof(buf), "%uhop", (unsigned)node.hops);
-        return buf;
-    }
-    return "";
-}
-
 std::string peerMetaFor(const DiscoveredNode& node, unsigned long ageMs, bool devMode) {
-    std::string meta = hopTextFor(node);
-    if (!meta.empty()) meta += " ";
-    meta += compactAge(ageMs);
+    std::string meta = compactAge(ageMs);
     if (devMode && node.rssi != 0) {
         char buf[14];
         snprintf(buf, sizeof(buf), " %ddB", node.rssi);
@@ -242,7 +231,8 @@ void LvNodesScreen::refreshUI() {
     for (const auto& n : _am->nodes()) { if (n.saved) contacts++; }
     int countDelta = abs(_am->nodeCount() - _lastNodeCount);
     int contactDelta = abs(contacts - _lastContactCount);
-    if (countDelta > 0 || contactDelta > 0) {
+    bool ageRefresh = now - _lastRebuild >= AGE_REBUILD_INTERVAL_MS;
+    if (countDelta > 0 || contactDelta > 0 || ageRefresh) {
         _lastRebuild = now;
         rebuildList();
     }
@@ -250,6 +240,7 @@ void LvNodesScreen::refreshUI() {
 
 void LvNodesScreen::rebuildList() {
     if (!_am || !_list) return;
+    _lastRebuild = millis();
     // Preserve scroll position across rebuilds
     lv_coord_t scrollY = lv_obj_get_scroll_y(_list);
     lv_obj_clean(_list);

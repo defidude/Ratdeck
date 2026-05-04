@@ -1024,7 +1024,12 @@ void setup() {
     lvTimezoneScreen.setDoneCallback([goHome](int tzIdx) {
         userConfig.settings().timezoneIdx = (uint8_t)tzIdx;
         userConfig.settings().timezoneSet = true;
-        userConfig.save(sdStore, flash);
+        bool saved = userConfig.save(sdStore, flash);
+        if (!saved) {
+            Serial.println("[BOOT] Timezone save failed; staying in setup");
+            ui.lvStatusBar().showToast("Save failed; storage unavailable", 3000);
+            return;
+        }
         Serial.printf("[BOOT] Timezone set: %s (%s)\n",
             TIMEZONE_TABLE[tzIdx].label, TIMEZONE_TABLE[tzIdx].posixTZ);
         // Apply timezone immediately
@@ -1057,7 +1062,12 @@ void setup() {
             finalName = "Ratspeak.org-" + dh.substring(0, 3);
         }
         userConfig.settings().displayName = finalName;
-        userConfig.save(sdStore, flash);
+        bool saved = userConfig.save(sdStore, flash);
+        if (!saved) {
+            Serial.println("[BOOT] Display name save failed; staying in setup");
+            ui.lvStatusBar().showToast("Save failed; storage unavailable", 3000);
+            return;
+        }
         // Also save to active identity slot
         if (identityMgr.activeIndex() >= 0) {
             identityMgr.setDisplayName(identityMgr.activeIndex(), finalName);

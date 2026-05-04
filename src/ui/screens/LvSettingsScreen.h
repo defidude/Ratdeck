@@ -194,6 +194,8 @@ private:
     };
     RebootSnapshot _rebootSnap;
     void snapshotRebootSettings();
+    bool interfaceSettingsChanged() const;
+    bool storageSettingsChanged() const;
     bool rebootSettingsChanged() const;
 
     // TCP change detection

@@ -188,24 +188,43 @@ bool UserConfig::save(FlashStore& flash) {
 
 bool UserConfig::load(SDStore& sd, FlashStore& flash) {
     String json = flash.readString(PATH_USER_CONFIG);
-    if (json.isEmpty()) {
-        Serial.println("[CONFIG] No saved config, using defaults");
-        return false;
+    bool flashOk = false;
+    if (!json.isEmpty()) {
+        flashOk = parseJson(json);
+    } else {
+        Serial.println("[CONFIG] No flash config found");
     }
 
-    bool ok = parseJson(json);
-
-    if (ok && _settings.sdStorageEnabled && sd.isReady()) {
+    if (flashOk && _settings.sdStorageEnabled && sd.isReady()) {
         String sdJson = sd.readString(SD_PATH_USER_CONFIG);
         if (!sdJson.isEmpty()) {
             Serial.println("[CONFIG] Loading opt-in SD config");
             bool sdOk = parseJson(sdJson);
-            _settings.sdStorageEnabled = true;
-            return sdOk;
+            if (sdOk) {
+                _settings.sdStorageEnabled = true;
+                return true;
+            }
+            Serial.println("[CONFIG] SD config invalid, keeping flash config");
+            return true;
         }
     }
 
-    return ok;
+    if (!flashOk && sd.isReady()) {
+        String sdJson = sd.readString(SD_PATH_USER_CONFIG);
+        if (!sdJson.isEmpty()) {
+            Serial.println("[CONFIG] Flash config unavailable, trying SD config");
+            bool sdOk = parseJson(sdJson);
+            if (sdOk) {
+                _settings.sdStorageEnabled = true;
+                flash.writeString(PATH_USER_CONFIG, serializeToJson());
+                return true;
+            }
+            Serial.println("[CONFIG] SD config invalid");
+        }
+    }
+
+    if (!flashOk) Serial.println("[CONFIG] No saved config, using defaults");
+    return flashOk;
 }
 
 bool UserConfig::save(SDStore& sd, FlashStore& flash) {

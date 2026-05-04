@@ -50,6 +50,35 @@ std::string shortText(const std::string& text, size_t maxLen) {
     return text.substr(0, maxLen - 3) + "...";
 }
 
+std::string chatPreviewText(const std::string& text, size_t maxLen) {
+    if (text.empty()) return text;
+
+    std::string firstLine;
+    firstLine.reserve(std::min(text.size(), maxLen));
+    bool truncated = false;
+    for (char c : text) {
+        if (c == '\r' || c == '\n') {
+            truncated = true;
+            break;
+        }
+        firstLine += (c == '\t') ? ' ' : c;
+    }
+
+    while (!firstLine.empty() && firstLine.back() == ' ') {
+        firstLine.pop_back();
+    }
+
+    if (firstLine.size() > maxLen) {
+        firstLine = shortText(firstLine, maxLen);
+    } else if (truncated && firstLine.size() + 3 <= maxLen) {
+        firstLine += "...";
+    } else if (truncated && firstLine.size() > 3) {
+        firstLine = firstLine.substr(0, maxLen - 3) + "...";
+    }
+
+    return firstLine;
+}
+
 std::string displayNameForPeer(AnnounceManager* am, const std::string& peerHex) {
     if (am) {
         std::string peerName = am->lookupName(peerHex);
@@ -178,7 +207,7 @@ void LvMessagesScreen::rebuildList() {
         auto* s = _lxmf->getConversationSummary(ci.peerHex);
         if (s) {
             ci.lastTs = s->lastTimestamp;
-            ci.preview = s->lastPreview;
+            ci.preview = chatPreviewText(s->lastPreview, 56);
             ci.lastIncoming = s->lastIncoming;
             ci.unreadCount = s->unreadCount;
             ci.totalCount = s->totalCount;

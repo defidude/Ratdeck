@@ -173,21 +173,27 @@ void LvSettingsScreen::skipToNextEditable(int dir) {
 
 bool LvSettingsScreen::settingNeedsReboot(const SettingItem& item) const {
     if (!_cfg) return false;
-    auto& s = _cfg->settings();
+    const auto& s = _cfg->settings();
     if (labelEq(item.label, "WiFi Mode")) return s.wifiMode != _rebootSnap.wifiMode;
     if (labelEq(item.label, "Active WiFi")) return s.wifiSTASelected != _rebootSnap.wifiSTASelected;
-    if (isWiFiSSIDLabel(item.label) || isWiFiPasswordLabel(item.label)) return rebootSettingsChanged();
-    if (labelEq(item.label, "WiFi Scan") || labelEq(item.label, "Forget WiFi")) return rebootSettingsChanged();
+    if (isWiFiSSIDLabel(item.label) || isWiFiPasswordLabel(item.label)) return interfaceSettingsChanged();
+    if (labelEq(item.label, "WiFi Scan") || labelEq(item.label, "Forget WiFi")) return interfaceSettingsChanged();
+    if (labelEq(item.label, "TCP Relay") || labelEq(item.label, "Relay Host") ||
+        labelEq(item.label, "Relay Port")) return tcpSettingsChanged();
     if (labelEq(item.label, "LAN Discovery")) return s.autoIfaceEnabled != _rebootSnap.autoIfaceEnabled;
-    if (labelEq(item.label, "SD Message Store")) return s.sdStorageEnabled != _rebootSnap.sdStorageEnabled;
+    if (labelEq(item.label, "SD Message Store")) return storageSettingsChanged();
     return false;
 }
 
 bool LvSettingsScreen::categoryNeedsReboot(int catIdx) const {
     if (catIdx < 0 || catIdx >= (int)_categories.size()) return false;
-    return (labelEq(_categories[catIdx].name, "Interfaces")
-            || labelEq(_categories[catIdx].name, "Storage & Maintenance"))
-        && rebootSettingsChanged();
+    if (labelEq(_categories[catIdx].name, "Interfaces")) {
+        return interfaceSettingsChanged() || tcpSettingsChanged();
+    }
+    if (labelEq(_categories[catIdx].name, "Storage & Maintenance")) {
+        return storageSettingsChanged();
+    }
+    return false;
 }
 
 bool LvSettingsScreen::confirmableAction(const SettingItem& item) const {
@@ -1894,18 +1900,26 @@ void LvSettingsScreen::snapshotRebootSettings() {
 }
 
 bool LvSettingsScreen::rebootSettingsChanged() const {
+    return interfaceSettingsChanged() || storageSettingsChanged() || tcpSettingsChanged();
+}
+
+bool LvSettingsScreen::interfaceSettingsChanged() const {
     if (!_cfg) return false;
-    auto& s = _cfg->settings();
+    const auto& s = _cfg->settings();
     if (s.wifiMode != _rebootSnap.wifiMode) return true;
     if (s.wifiSTASelected != _rebootSnap.wifiSTASelected) return true;
     if (s.autoIfaceEnabled != _rebootSnap.autoIfaceEnabled) return true;
-    if (s.sdStorageEnabled != _rebootSnap.sdStorageEnabled) return true;
     if (s.wifiSTANetworks.size() != _rebootSnap.wifiSTANetworks.size()) return true;
     for (size_t i = 0; i < s.wifiSTANetworks.size(); i++) {
         if (s.wifiSTANetworks[i].ssid != _rebootSnap.wifiSTANetworks[i].ssid) return true;
         if (s.wifiSTANetworks[i].password != _rebootSnap.wifiSTANetworks[i].password) return true;
     }
     return false;
+}
+
+bool LvSettingsScreen::storageSettingsChanged() const {
+    if (!_cfg) return false;
+    return _cfg->settings().sdStorageEnabled != _rebootSnap.sdStorageEnabled;
 }
 
 void LvSettingsScreen::snapshotTCPSettings() {
@@ -1997,11 +2011,8 @@ void LvSettingsScreen::applyAndSave() {
     else if (_sd && _flash) { saved = _cfg->save(*_sd, *_flash); }
     else if (_flash) { saved = _cfg->save(*_flash); }
 
-    // Apply TCP changes live (stop old clients, create new ones, clear transient nodes)
-    if (tcpChanged) {
-        snapshotTCPSettings();
-        if (_tcpChangeCb) _tcpChangeCb();
-    }
+    // TCP relay changes are persisted only. Recreating clients live can race
+    // in-flight sockets/netif teardown on ESP32; reboot applies them cleanly.
 
     // Apply GPS toggle live (start/stop GPS UART)
     if (s.gpsTimeEnabled != _gpsSnapEnabled) {
@@ -2014,14 +2025,18 @@ void LvSettingsScreen::applyAndSave() {
     _rebootNeeded = rebootSettingsChanged();
 
     if (_ui) {
-        if (_rebootNeeded && !wasRebootNeeded) {
-            _ui->lvStatusBar().showToast("Interface changes saved; reboot to apply", 3000);
+        if (!saved) {
+            _ui->lvStatusBar().showToast("Save failed", 2000);
+        } else if (_rebootNeeded && !wasRebootNeeded) {
+            _ui->lvStatusBar().showToast(
+                tcpChanged ? "TCP relay saved; reboot to apply" : "Interface changes saved; reboot to apply",
+                3000);
         } else if (!_rebootNeeded && wasRebootNeeded) {
             _ui->lvStatusBar().showToast("Pending reboot cleared", 1500);
         } else if (tcpChanged) {
-            _ui->lvStatusBar().showToast("TCP relay updated", 1200);
+            _ui->lvStatusBar().showToast("TCP relay saved; reboot to apply", 3000);
         } else {
-            _ui->lvStatusBar().showToast(saved ? "Saved" : "Applied", 800);
+            _ui->lvStatusBar().showToast("Saved", 800);
         }
     }
 }

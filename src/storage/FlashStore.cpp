@@ -6,7 +6,7 @@ bool FlashStore::begin() {
     const char* labels[] = { "littlefs", "spiffs" };
     bool mounted = false;
     for (const char* label : labels) {
-        if (LittleFS.begin(true, "/littlefs", 10, label)) {
+        if (LittleFS.begin(false, "/littlefs", 10, label)) {
             Serial.printf("[FLASH] LittleFS mounted on partition '%s'\n", label);
             mounted = true;
             break;

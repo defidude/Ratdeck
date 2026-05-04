@@ -4,6 +4,7 @@ into a single .bin for M5Burner and one-step flashing."""
 Import("env")
 
 import os
+import shlex
 
 
 def merge_bin(source, target, env):
@@ -16,14 +17,15 @@ def merge_bin(source, target, env):
 
     output = os.path.join(project_dir, "ratdeck-merged.bin")
 
+    python = env.subst("$PYTHONEXE")
     env.Execute(
-        "esptool.py --chip esp32s3 merge_bin "
+        f"{shlex.quote(python)} -m esptool --chip esp32s3 merge_bin "
         "--flash_mode qio --flash_size 16MB "
-        f"-o {output} "
-        f"0x0000 {build_dir}/bootloader.bin "
-        f"0x8000 {build_dir}/partitions.bin "
-        f"0xe000 {boot_app0} "
-        f"0x10000 {build_dir}/firmware.bin"
+        f"-o {shlex.quote(output)} "
+        f"0x0000 {shlex.quote(os.path.join(build_dir, 'bootloader.bin'))} "
+        f"0x8000 {shlex.quote(os.path.join(build_dir, 'partitions.bin'))} "
+        f"0xe000 {shlex.quote(boot_app0)} "
+        f"0x10000 {shlex.quote(os.path.join(build_dir, 'firmware.bin'))}"
     )
     print(f"\n** Merged firmware written to: {output}")
 

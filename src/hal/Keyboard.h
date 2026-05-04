@@ -52,7 +52,7 @@ public:
     // - The ESP32-C3 F/W uses 2 brightness settings, one for <Alt>+<B> (which doesn't
     //   change the current brightness), the other one for the current brightness.
     //   The range for the 1st one is limited to [31, 255], we use it for the 2nd one, too.
-    bool setBacklightBrightness(uint8_t percent); // doesn't change the current brightness
+    bool setBacklightBrightness(uint8_t percent); // 0 stores off; non-zero doesn't change current brightness
     bool backlightOn();
     bool backlightOff();
 

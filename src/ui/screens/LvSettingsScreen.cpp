@@ -18,7 +18,6 @@
 #include <nvs_flash.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <ArduinoJson.h>
 #include "fonts/fonts.h"
 
 struct RadioPresetLv {
@@ -37,12 +36,102 @@ static const RadioPresetLv LV_PRESETS[] = {
 };
 static constexpr int LV_NUM_PRESETS = 8;
 
+namespace {
+
+bool labelEq(const char* a, const char* b) {
+    return a && b && strcmp(a, b) == 0;
+}
+
+const char* onOff(bool enabled) {
+    return enabled ? "ON" : "OFF";
+}
+
+const char* wifiModeLabel(RatWiFiMode mode) {
+    switch (mode) {
+        case RAT_WIFI_AP: return "Hotspot";
+        case RAT_WIFI_STA: return "Client";
+        case RAT_WIFI_OFF:
+        default: return "Off";
+    }
+}
+
+String maskedValue(const String& value) {
+    if (value.isEmpty()) return String("");
+    int len = constrain((int)value.length(), 4, 12);
+    String masked;
+    masked.reserve(len);
+    for (int i = 0; i < len; i++) masked += '*';
+    return masked;
+}
+
+bool isWiFiSSIDLabel(const char* label) {
+    return labelEq(label, "WiFi SSID");
+}
+
+bool isWiFiPasswordLabel(const char* label) {
+    return labelEq(label, "WiFi Password");
+}
+
+size_t selectedWiFiSlot(const UserSettings& s) {
+    return s.wifiSTASelected < WIFI_STA_MAX_NETWORKS ? s.wifiSTASelected : 0;
+}
+
+void ensureWiFiSlot(UserSettings& s, size_t slot) {
+    while (s.wifiSTANetworks.size() <= slot && s.wifiSTANetworks.size() < WIFI_STA_MAX_NETWORKS) {
+        s.wifiSTANetworks.push_back({});
+    }
+}
+
+String wifiProfileValue(const UserSettings& s, size_t slot) {
+    String label = String(slot + 1);
+    label += " ";
+    if (slot < s.wifiSTANetworks.size() && !s.wifiSTANetworks[slot].ssid.isEmpty()) {
+        label += s.wifiSTANetworks[slot].ssid;
+    } else {
+        label += "empty";
+    }
+    return label;
+}
+
+String selectedWiFiSSID(const UserSettings& s) {
+    size_t slot = selectedWiFiSlot(s);
+    if (slot >= s.wifiSTANetworks.size()) return String("");
+    return s.wifiSTANetworks[slot].ssid;
+}
+
+void clipLabel(lv_obj_t* lbl, int width) {
+    lv_obj_set_width(lbl, width);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
+}
+
+bool extractReleaseTag(const String& payload, char* out, size_t outLen) {
+    if (!out || outLen == 0) return false;
+    out[0] = '\0';
+    int key = payload.indexOf("\"tag_name\"");
+    if (key < 0) return false;
+    int colon = payload.indexOf(':', key);
+    if (colon < 0) return false;
+    int start = payload.indexOf('"', colon + 1);
+    if (start < 0) return false;
+    int end = payload.indexOf('"', start + 1);
+    if (end <= start + 1) return false;
+
+    String tag = payload.substring(start + 1, end);
+    if (tag.startsWith("v") || tag.startsWith("V")) tag.remove(0, 1);
+    tag.trim();
+    if (tag.isEmpty()) return false;
+    strlcpy(out, tag.c_str(), outLen);
+    return out[0] != '\0';
+}
+
+}  // namespace
+
 int LvSettingsScreen::detectPreset() const {
     if (!_cfg) return -1;
     auto& s = _cfg->settings();
     // Check if frequency matches the current region's default
     uint32_t regionFreq = REGION_FREQ[constrain(s.radioRegion, 0, REGION_COUNT - 1)];
-    if (s.loraFrequency != regionFreq) return -1;  // Custom frequency → no preset match
+    if (s.loraFrequency != regionFreq) return -1;  // Custom frequency: no preset match
     for (int i = 0; i < LV_NUM_PRESETS; i++) {
         if (s.loraSF == LV_PRESETS[i].sf && s.loraBW == LV_PRESETS[i].bw
             && s.loraCR == LV_PRESETS[i].cr && s.loraTxPower == LV_PRESETS[i].txPower)
@@ -82,7 +171,194 @@ void LvSettingsScreen::skipToNextEditable(int dir) {
     _selectedIdx = start;
 }
 
-// buildItems() — identical logic to SettingsScreen::buildItems()
+bool LvSettingsScreen::settingNeedsReboot(const SettingItem& item) const {
+    if (!_cfg) return false;
+    auto& s = _cfg->settings();
+    if (labelEq(item.label, "WiFi Mode")) return s.wifiMode != _rebootSnap.wifiMode;
+    if (labelEq(item.label, "Active WiFi")) return s.wifiSTASelected != _rebootSnap.wifiSTASelected;
+    if (isWiFiSSIDLabel(item.label) || isWiFiPasswordLabel(item.label)) return rebootSettingsChanged();
+    if (labelEq(item.label, "WiFi Scan") || labelEq(item.label, "Forget WiFi")) return rebootSettingsChanged();
+    if (labelEq(item.label, "LAN Discovery")) return s.autoIfaceEnabled != _rebootSnap.autoIfaceEnabled;
+    if (labelEq(item.label, "SD Message Store")) return s.sdStorageEnabled != _rebootSnap.sdStorageEnabled;
+    return false;
+}
+
+bool LvSettingsScreen::categoryNeedsReboot(int catIdx) const {
+    if (catIdx < 0 || catIdx >= (int)_categories.size()) return false;
+    return (labelEq(_categories[catIdx].name, "Interfaces")
+            || labelEq(_categories[catIdx].name, "Storage & Maintenance"))
+        && rebootSettingsChanged();
+}
+
+bool LvSettingsScreen::confirmableAction(const SettingItem& item) const {
+    return labelEq(item.label, "Developer Radio Controls")
+        || labelEq(item.label, "Format SD Card")
+        || labelEq(item.label, "Erase Ratdeck SD Data")
+        || labelEq(item.label, "Erase Device");
+}
+
+bool LvSettingsScreen::armedAction(const SettingItem& item) const {
+    return (_confirmingInitSD && labelEq(item.label, "Format SD Card")) ||
+        (_confirmingWipeSD && labelEq(item.label, "Erase Ratdeck SD Data")) ||
+        (_confirmingReset && labelEq(item.label, "Erase Device")) ||
+        (_confirmingDevMode && labelEq(item.label, "Developer Radio Controls"));
+}
+
+bool LvSettingsScreen::destructiveAction(const SettingItem& item) const {
+    return labelEq(item.label, "Format SD Card")
+        || labelEq(item.label, "Erase Ratdeck SD Data")
+        || labelEq(item.label, "Erase Device");
+}
+
+const char* LvSettingsScreen::confirmationTitle() const {
+    if (_confirmingInitSD) return "ARMED: FORMAT SD CARD";
+    if (_confirmingWipeSD) return "ARMED: ERASE SD DATA";
+    if (_confirmingReset) return "ARMED: ERASE DEVICE";
+    if (_confirmingDevMode) return "ARMED: UNLOCK RF CONTROLS";
+    return nullptr;
+}
+
+const char* LvSettingsScreen::confirmationDetail() const {
+    if (_confirmingInitSD) return "Hold trackball to format. Esc cancels.";
+    if (_confirmingWipeSD) return "Hold trackball to erase SD data. Esc cancels.";
+    if (_confirmingReset) return "Hold trackball to erase device. Esc cancels.";
+    if (_confirmingDevMode) return "Hold trackball to unlock. Esc cancels.";
+    return nullptr;
+}
+
+bool LvSettingsScreen::hasPendingConfirmation() const {
+    return _confirmingInitSD || _confirmingWipeSD || _confirmingReset || _confirmingDevMode;
+}
+
+void LvSettingsScreen::clearConfirmations() {
+    _confirmingInitSD = false;
+    _confirmingWipeSD = false;
+    _confirmingReset = false;
+    _confirmingDevMode = false;
+}
+
+void LvSettingsScreen::runFormatSD() {
+    _confirmingInitSD = false;
+    if (!_sd || !_sd->isReady()) {
+        if (_ui) _ui->lvStatusBar().showToast("No SD card", 1200);
+        rebuildItemList();
+        return;
+    }
+    if (_ui) _ui->lvStatusBar().showToast("Formatting SD card...", 2000);
+    bool ok = _sd->formatForRatdeck();
+    if (_ui) _ui->lvStatusBar().showToast(ok ? "SD card formatted" : "SD format failed", 1500);
+    rebuildItemList();
+}
+
+void LvSettingsScreen::runWipeSD() {
+    _confirmingWipeSD = false;
+    if (!_sd || !_sd->isReady()) {
+        if (_ui) _ui->lvStatusBar().showToast("No SD card", 1200);
+        rebuildItemList();
+        return;
+    }
+    if (_ui) _ui->lvStatusBar().showToast("Erasing Ratdeck SD data...", 2000);
+    bool ok = _sd->wipeRatdeck();
+    if (_ui) _ui->lvStatusBar().showToast(ok ? "SD data erased" : "SD erase failed", 1500);
+    rebuildItemList();
+}
+
+void LvSettingsScreen::runFactoryReset() {
+    _confirmingReset = false;
+    if (_ui) _ui->lvStatusBar().showToast("Erasing device...", 3000);
+    if (_sd && _sd->isReady()) _sd->wipeRatdeck();
+    if (_flash) _flash->format();
+    nvs_flash_erase();
+    delay(1500);  // Long enough for key state to clear before reboot
+    ESP.restart();
+}
+
+void LvSettingsScreen::runEnableDevMode() {
+    _confirmingDevMode = false;
+    if (!_cfg) {
+        rebuildItemList();
+        return;
+    }
+    _cfg->settings().devMode = true;
+    applyAndSave();
+    buildItems();
+    enterCategory(_categoryIdx);
+    if (_ui) _ui->lvStatusBar().showToast("Developer radio controls unlocked", 1500);
+}
+
+void LvSettingsScreen::startFirmwareCheck() {
+    if (WiFi.status() != WL_CONNECTED) {
+        if (_ui) _ui->lvStatusBar().showToast("Connect WiFi to check firmware", 2500);
+        return;
+    }
+    if (_fwCheckState == FirmwareCheckState::RUNNING) {
+        if (_ui) _ui->lvStatusBar().showToast("Firmware check already running", 1200);
+        return;
+    }
+
+    _fwCheckVersion[0] = '\0';
+    _fwCheckState = FirmwareCheckState::RUNNING;
+    if (xTaskCreatePinnedToCore(
+            firmwareCheckTask,
+            "fw-check",
+            6144,
+            this,
+            1,
+            &_fwCheckTask,
+            0) != pdPASS) {
+        _fwCheckTask = nullptr;
+        _fwCheckState = FirmwareCheckState::FAILED;
+    } else if (_ui) {
+        _ui->lvStatusBar().showToast("Checking firmware release...", 1200);
+    }
+}
+
+void LvSettingsScreen::firmwareCheckTask(void* arg) {
+    auto* self = static_cast<LvSettingsScreen*>(arg);
+    if (!self) {
+        vTaskDelete(nullptr);
+        return;
+    }
+
+    FirmwareCheckState result = FirmwareCheckState::FAILED;
+    char version[sizeof(self->_fwCheckVersion)] = {};
+
+    HTTPClient http;
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    http.setTimeout(5000);
+    if (http.begin("https://api.github.com/repos/ratspeak/ratdeck/releases/latest")) {
+        http.addHeader("Accept", "application/vnd.github.v3+json");
+        int httpCode = http.GET();
+        if (httpCode == 200) {
+            WiFiClient* stream = http.getStreamPtr();
+            String payload;
+            payload.reserve(1536);
+            unsigned long start = millis();
+            while (stream && http.connected() && millis() - start < 5000 && payload.length() < 2048) {
+                while (stream->available() && payload.length() < 2048) {
+                    payload += (char)stream->read();
+                    if (payload.indexOf("\"tag_name\"") >= 0 && payload.indexOf('\n', payload.indexOf("\"tag_name\"")) >= 0) {
+                        break;
+                    }
+                }
+                if (extractReleaseTag(payload, version, sizeof(version))) break;
+                delay(10);
+            }
+            if (extractReleaseTag(payload, version, sizeof(version))) {
+                result = strcmp(version, RATDECK_VERSION_STRING) > 0
+                    ? FirmwareCheckState::AVAILABLE
+                    : FirmwareCheckState::CURRENT;
+            }
+        }
+    }
+    http.end();
+
+    if (version[0]) strlcpy(self->_fwCheckVersion, version, sizeof(self->_fwCheckVersion));
+    self->_fwCheckState = result;
+    self->_fwCheckTask = nullptr;
+    vTaskDelete(nullptr);
+}
+
 void LvSettingsScreen::buildItems() {
     _items.clear();
     _categories.clear();
@@ -90,15 +366,15 @@ void LvSettingsScreen::buildItems() {
     auto& s = _cfg->settings();
     int idx = 0;
 
-    // Device
+    // Identity & Device
     int devStart = idx;
-    _items.push_back({"Version", SettingType::READONLY, nullptr, nullptr,
+    _items.push_back({"Firmware", SettingType::READONLY, nullptr, nullptr,
         [](int) { return String(RATDECK_VERSION_STRING); }});
     idx++;
-    _items.push_back({"LXMF Addr", SettingType::READONLY, nullptr, nullptr,
+    _items.push_back({"LXMF Address", SettingType::READONLY, nullptr, nullptr,
         [this](int) { return _destinationHash.length() > 0 ? _destinationHash : String("unknown"); }});
     idx++;
-    _items.push_back({"Identity", SettingType::READONLY, nullptr, nullptr,
+    _items.push_back({"Identity Hash", SettingType::READONLY, nullptr, nullptr,
         [this](int) { return _identityHash; }});
     idx++;
     {
@@ -119,7 +395,7 @@ void LvSettingsScreen::buildItems() {
     }
     if (_idMgr && _idMgr->count() > 0) {
         SettingItem idSwitch;
-        idSwitch.label = "Active Identity";
+        idSwitch.label = "Identity Slot";
         idSwitch.type = SettingType::ENUM_CHOICE;
         idSwitch.getter = [this]() { return _idMgr->activeIndex(); };
         idSwitch.setter = [this](int v) {
@@ -134,12 +410,12 @@ void LvSettingsScreen::buildItems() {
                 if (_cfg) {
                     _cfg->settings().displayName = _idMgr->getDisplayName(v);
                 }
-                if (_ui) _ui->lvStatusBar().showToast("Identity switched! Rebooting...", 2000);
+                if (_ui) _ui->lvStatusBar().showToast("Identity switched; rebooting", 2000);
                 applyAndSave();
                 delay(1000);
                 ESP.restart();
             } else {
-                if (_ui) _ui->lvStatusBar().showToast("Switch failed!", 1500);
+                if (_ui) _ui->lvStatusBar().showToast("Identity switch failed", 1500);
             }
         };
         idSwitch.minVal = 0;
@@ -161,15 +437,15 @@ void LvSettingsScreen::buildItems() {
     }
     {
         SettingItem newId;
-        newId.label = "New Identity";
+        newId.label = "Create Identity";
         newId.type = SettingType::ACTION;
         newId.formatter = [](int) { return String("[Enter]"); };
         newId.action = [this, &s]() {
             if (!_idMgr) { if (_ui) _ui->lvStatusBar().showToast("Not available", 1200); return; }
-            if (_idMgr->count() >= 8) { if (_ui) _ui->lvStatusBar().showToast("Max 8 identities!", 1200); return; }
+            if (_idMgr->count() >= 8) { if (_ui) _ui->lvStatusBar().showToast("Identity slots full", 1200); return; }
             int idx = _idMgr->createIdentity(s.displayName);
             if (idx >= 0) {
-                if (_ui) _ui->lvStatusBar().showToast("Identity created!", 1200);
+                if (_ui) _ui->lvStatusBar().showToast("Identity created", 1200);
                 buildItems();
                 rebuildCategoryList();
             }
@@ -177,85 +453,61 @@ void LvSettingsScreen::buildItems() {
         _items.push_back(newId);
         idx++;
     }
-    _items.push_back({"Announce Interval", SettingType::INTEGER,
+    _items.push_back({"Auto Announce", SettingType::INTEGER,
         [&s]() { return s.announceInterval; }, [&s](int v) { s.announceInterval = v; },
-        [](int v) { return String(v) + "m"; }, 5, 60 * 6, 5}); // 5m - 6h
+        [](int v) { return String(v) + "m"; }, 30, 60 * 6, 5}); // 30m - 6h
     idx++;
-    {
-        SettingItem devModeItem;
-        devModeItem.label = "Developer Mode";
-        devModeItem.type = SettingType::ACTION;
-        devModeItem.formatter = [&s](int) { return s.devMode ? String("ON") : String("OFF"); };
-        devModeItem.action = [this, &s]() {
-            if (s.devMode) {
-                // Already on — just turn it off
-                s.devMode = false;
-                _confirmingDevMode = false;
-                applyAndSave();
-                buildItems();
-                enterCategory(_categoryIdx);
-                if (_ui) _ui->lvStatusBar().showToast("Developer mode OFF", 1200);
-                return;
-            }
-            if (!_confirmingDevMode) {
-                _confirmingDevMode = true;
-                if (_ui) _ui->lvStatusBar().showToast("WARNING: KNOW YOUR LAWS! Enter=Enable", 5000);
-                rebuildItemList();
-                return;
-            }
-            // Confirmed
-            _confirmingDevMode = false;
-            s.devMode = true;
-            applyAndSave();
-            buildItems();
-            enterCategory(_categoryIdx);
-            if (_ui) _ui->lvStatusBar().showToast("Developer mode ON", 1200);
-        };
-        _items.push_back(devModeItem);
-        idx++;
-    }
-    _categories.push_back({"Device", devStart, idx - devStart,
-        [&s]() { return s.displayName.isEmpty() ? String("(unnamed)") : s.displayName; }});
+    _categories.push_back({"Identity & Device", devStart, idx - devStart,
+        [&s]() -> String {
+            String name = s.displayName.isEmpty() ? String("Unnamed device") : s.displayName;
+            if (s.devMode) name += " / Dev Enabled";
+            return name;
+        }});
 
-    // Display & Input
+    // Screen & Input
     int dispStart = idx;
-    _items.push_back({"Display Brightness", SettingType::INTEGER,
+    _items.push_back({"Screen Brightness", SettingType::INTEGER,
         [&s]() { return s.brightness; }, [&s](int v) { s.brightness = v; },
         [](int v) { return String(v) + "%"; }, 5, 100, 5});
     idx++;
-    _items.push_back({"Display Dim Timeout", SettingType::INTEGER,
+    _items.push_back({"Dim After", SettingType::INTEGER,
         [&s]() { return s.screenDimTimeout; }, [&s](int v) { s.screenDimTimeout = v; },
         [](int v) { return String(v) + "s"; }, 5, 300, 5});
     idx++;
-    _items.push_back({"Display Off Timeout", SettingType::INTEGER,
+    _items.push_back({"Display Off After", SettingType::INTEGER,
         [&s]() { return s.screenOffTimeout; }, [&s](int v) { s.screenOffTimeout = v; },
         [](int v) { return String(v) + "s"; }, 10, 600, 10});
     idx++;
-    _items.push_back({"Keyboard Backlight Brightness", SettingType::INTEGER,
+    _items.push_back({"Key Backlight", SettingType::INTEGER,
         [&s]() { return s.keyboardBrightness; }, [&s](int v) { s.keyboardBrightness = v; },
-        [](int v) { return String(v) + "%"; }, 5, 100, 5});
+        [](int v) { return v <= 0 ? String("OFF") : String(v) + "%"; }, 0, 100, 5});
     idx++;
-    _items.push_back({"Keyboard Backlight Auto-ON", SettingType::TOGGLE,
+    _items.push_back({"Keys Wake Light", SettingType::TOGGLE,
         [&s]() { return s.keyboardAutoOn ? 1 : 0; },
         [&s](int v) { s.keyboardAutoOn = (v != 0); },
-        [](int v) { return v ? String("ON") : String("OFF"); }});
+        [](int v) { return String(onOff(v != 0)); }});
     idx++;
-    _items.push_back({"Keyboard Backlight Auto-OFF", SettingType::TOGGLE,
+    _items.push_back({"Keys Auto-Off", SettingType::TOGGLE,
         [&s]() { return s.keyboardAutoOff ? 1 : 0; },
         [&s](int v) { s.keyboardAutoOff = (v != 0); },
-        [](int v) { return v ? String("ON") : String("OFF"); }});
+        [](int v) { return String(onOff(v != 0)); }});
     idx++;
     _items.push_back({"Trackball Speed", SettingType::INTEGER,
         [&s]() { return s.trackballSpeed; }, [&s](int v) { s.trackballSpeed = v; },
         [](int v) { return String(v); }, 1, 5, 1});
     idx++;
-    _categories.push_back({"Display & Input", dispStart, idx - dispStart,
-        [&s]() { return String(s.brightness) + "%"; }});
+    _categories.push_back({"Screen & Input", dispStart, idx - dispStart,
+        [&s]() -> String {
+            String summary = String("Screen ") + String(s.brightness);
+            summary += "% / Keys ";
+            summary += s.keyboardBrightness == 0 ? String("OFF") : String(s.keyboardBrightness) + "%";
+            return summary;
+        }});
 
-    // Radio
+    // LoRa link
     int radioStart = idx;
     {
-        // Region picker — always visible
+        // Region picker - always visible
         SettingItem regionItem;
         regionItem.label = "Region";
         regionItem.type = SettingType::ENUM_CHOICE;
@@ -270,7 +522,7 @@ void LvSettingsScreen::buildItems() {
         idx++;
 
         SettingItem presetItem;
-        presetItem.label = "Preset";
+        presetItem.label = "Link Preset";
         presetItem.type = SettingType::ENUM_CHOICE;
         presetItem.getter = [this]() { int p = detectPreset(); return (p >= 0) ? p : LV_NUM_PRESETS; };
         presetItem.setter = [this](int v) { if (v >= 0 && v < LV_NUM_PRESETS) applyPreset(v); };
@@ -282,7 +534,38 @@ void LvSettingsScreen::buildItems() {
         _items.push_back(presetItem);
         idx++;
     }
-    // Custom radio parameters — only visible in Developer Mode
+    {
+        SettingItem devModeItem;
+        devModeItem.label = "Developer Radio Controls";
+        devModeItem.type = SettingType::ACTION;
+        devModeItem.formatter = [this, &s](int) {
+            if (_confirmingDevMode) return String("Hold");
+            return s.devMode ? String("Unlocked") : String("Locked");
+        };
+        devModeItem.action = [this, &s]() {
+            if (s.devMode) {
+                s.devMode = false;
+                _confirmingDevMode = false;
+                clearConfirmations();
+                applyAndSave();
+                buildItems();
+                enterCategory(_categoryIdx);
+                if (_ui) _ui->lvStatusBar().showToast("Developer radio controls locked", 1500);
+                return;
+            }
+            if (!_confirmingDevMode) {
+                clearConfirmations();
+                _confirmingDevMode = true;
+                if (_ui) _ui->lvStatusBar().showToast("RF controls armed. Hold to unlock", 5000);
+                rebuildItemList();
+                return;
+            }
+            if (_ui) _ui->lvStatusBar().showToast("Hold trackball to unlock RF controls", 2500);
+        };
+        _items.push_back(devModeItem);
+        idx++;
+    }
+    // Custom radio parameters - only visible in Developer Mode
     if (s.devMode) {
         _items.push_back({"Frequency", SettingType::INTEGER,
             [&s]() { return (int)(s.loraFrequency); },
@@ -336,29 +619,46 @@ void LvSettingsScreen::buildItems() {
             [](int v) { return String(v); }, 6, 65, 1});
         idx++;
     }
-    _categories.push_back({"Radio", radioStart, idx - radioStart,
+    _categories.push_back({"LoRa", radioStart, idx - radioStart,
         [this]() {
             int p = detectPreset();
             auto& s = _cfg->settings();
             String label = (p >= 0) ? String(LV_PRESETS[p].name) : String("Custom");
             label += " ";
             label += REGION_LABELS[constrain(s.radioRegion, 0, REGION_COUNT - 1)];
+            if (s.devMode) label += " / Dev";
             return label;
         }});
 
-    // Network
+    // Interfaces
     int netStart = idx;
     _items.push_back({"WiFi Mode", SettingType::ENUM_CHOICE,
         [&s]() { return (int)s.wifiMode; },
         [&s](int v) { s.wifiMode = (RatWiFiMode)v; },
-        nullptr, 0, 2, 1, {"OFF", "AP", "STA"}});
+        nullptr, 0, 2, 1, {"Off", "Hotspot", "Client"}});
+    idx++;
+    _items.push_back({"Active WiFi", SettingType::INTEGER,
+        [&s]() { return (int)selectedWiFiSlot(s) + 1; },
+        [&s](int v) { s.wifiSTASelected = (uint8_t)constrain(v - 1, 0, (int)WIFI_STA_MAX_NETWORKS - 1); },
+        [&s](int v) { return wifiProfileValue(s, constrain(v - 1, 0, (int)WIFI_STA_MAX_NETWORKS - 1)); },
+        1, (int)WIFI_STA_MAX_NETWORKS, 1});
     idx++;
     {
         SettingItem ssidItem;
         ssidItem.label = "WiFi SSID";
         ssidItem.type = SettingType::TEXT_INPUT;
-        ssidItem.textGetter = [&s]() { return s.wifiSTASSID; };
-        ssidItem.textSetter = [&s](const String& v) { s.wifiSTASSID = v; };
+        ssidItem.textGetter = [&s]() {
+            size_t slot = selectedWiFiSlot(s);
+            return slot < s.wifiSTANetworks.size() ? s.wifiSTANetworks[slot].ssid : String("");
+        };
+        ssidItem.textSetter = [&s](const String& v) {
+            size_t slot = selectedWiFiSlot(s);
+            ensureWiFiSlot(s, slot);
+            if (slot >= s.wifiSTANetworks.size()) return;
+            bool changed = s.wifiSTANetworks[slot].ssid != v;
+            s.wifiSTANetworks[slot].ssid = v;
+            if (changed || v.isEmpty()) s.wifiSTANetworks[slot].password = "";
+        };
         ssidItem.maxTextLen = 32;
         _items.push_back(ssidItem);
         idx++;
@@ -367,15 +667,56 @@ void LvSettingsScreen::buildItems() {
         SettingItem passItem;
         passItem.label = "WiFi Password";
         passItem.type = SettingType::TEXT_INPUT;
-        passItem.textGetter = [&s]() { return s.wifiSTAPassword; };
-        passItem.textSetter = [&s](const String& v) { s.wifiSTAPassword = v; };
-        passItem.maxTextLen = 32;
+        passItem.textGetter = [&s]() {
+            size_t slot = selectedWiFiSlot(s);
+            return slot < s.wifiSTANetworks.size() ? s.wifiSTANetworks[slot].password : String("");
+        };
+        passItem.textSetter = [&s](const String& v) {
+            size_t slot = selectedWiFiSlot(s);
+            ensureWiFiSlot(s, slot);
+            if (slot < s.wifiSTANetworks.size()) s.wifiSTANetworks[slot].password = v;
+        };
+        passItem.maxTextLen = 64;
         _items.push_back(passItem);
         idx++;
     }
     {
+        SettingItem scanItem;
+        scanItem.label = "WiFi Scan";
+        scanItem.type = SettingType::ACTION;
+        scanItem.formatter = [](int) { return String("[Enter]"); };
+        scanItem.action = [this, &s]() {
+            _wifiTargetSlot = selectedWiFiSlot(s);
+            showWifiPicker();
+        };
+        _items.push_back(scanItem);
+        idx++;
+    }
+    {
+        SettingItem forgetItem;
+        forgetItem.label = "Forget WiFi";
+        forgetItem.type = SettingType::ACTION;
+        forgetItem.formatter = [&s](int) {
+            String ssid = selectedWiFiSSID(s);
+            return ssid.isEmpty() ? String("Empty") : String("[Enter]");
+        };
+        forgetItem.action = [this, &s]() {
+            size_t slot = selectedWiFiSlot(s);
+            if (slot >= s.wifiSTANetworks.size() || s.wifiSTANetworks[slot].ssid.isEmpty()) {
+                if (_ui) _ui->lvStatusBar().showToast("WiFi profile already empty", 1200);
+                return;
+            }
+            s.wifiSTANetworks[slot].ssid = "";
+            s.wifiSTANetworks[slot].password = "";
+            applyAndSave();
+            if (_ui) _ui->lvStatusBar().showToast("WiFi profile cleared", 1200);
+        };
+        _items.push_back(forgetItem);
+        idx++;
+    }
+    {
         SettingItem tcpPreset;
-        tcpPreset.label = "TCP Server";
+        tcpPreset.label = "TCP Relay";
         tcpPreset.type = SettingType::ENUM_CHOICE;
         tcpPreset.getter = [&s]() {
             for (auto& ep : s.tcpConnections) { if (ep.host == "rns.ratspeak.org") return 1; }
@@ -397,7 +738,7 @@ void LvSettingsScreen::buildItems() {
     }
     {
         SettingItem tcpHost;
-        tcpHost.label = "TCP Host";
+        tcpHost.label = "Relay Host";
         tcpHost.type = SettingType::TEXT_INPUT;
         tcpHost.textGetter = [&s]() { return s.tcpConnections.empty() ? String("") : s.tcpConnections[0].host; };
         tcpHost.textSetter = [&s](const String& v) {
@@ -410,7 +751,7 @@ void LvSettingsScreen::buildItems() {
         _items.push_back(tcpHost);
         idx++;
     }
-    _items.push_back({"TCP Port", SettingType::INTEGER,
+    _items.push_back({"Relay Port", SettingType::INTEGER,
         [&s]() { return s.tcpConnections.empty() ? TCP_DEFAULT_PORT : (int)s.tcpConnections[0].port; },
         [&s](int v) {
             if (s.tcpConnections.empty()) {
@@ -420,34 +761,37 @@ void LvSettingsScreen::buildItems() {
         },
         [](int v) { return String(v); }, 1, 65535, 1});
     idx++;
-    _items.push_back({"BLE", SettingType::TOGGLE,
-        [&s]() { return s.bleEnabled ? 1 : 0; },
-        [&s](int v) { s.bleEnabled = (v != 0); },
-        [](int v) { return v ? String("ON") : String("OFF"); }});
-    idx++;
-    _items.push_back({"Auto-discover LAN", SettingType::TOGGLE,
+    _items.push_back({"LAN Discovery", SettingType::TOGGLE,
         [&s]() { return s.autoIfaceEnabled ? 1 : 0; },
         [&s](int v) { s.autoIfaceEnabled = (v != 0); },
-        [](int v) { return v ? String("ON") : String("OFF"); }});
+        [](int v) { return String(onOff(v != 0)); }});
     idx++;
-    _categories.push_back({"Network", netStart, idx - netStart,
-        [&s]() {
-            const char* modes[] = {"OFF", "AP", "STA"};
-            return String(modes[constrain((int)s.wifiMode, 0, 2)]);
+    _categories.push_back({"Interfaces", netStart, idx - netStart,
+        [this, &s]() {
+            if (rebootSettingsChanged()) return String("Saved - reboot to apply");
+            String summary = wifiModeLabel(s.wifiMode);
+            if (s.wifiMode == RAT_WIFI_STA) {
+                String ssid = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : selectedWiFiSSID(s);
+                summary += ": ";
+                summary += ssid.isEmpty() ? String("No profile") : ssid;
+            }
+            if (!s.tcpConnections.empty()) summary += " + TCP";
+            if (s.autoIfaceEnabled) summary += " + LAN";
+            return summary;
         }});
 
-    // GPS & Time
+    // Time & Location
     int gpsStart = idx;
 #if HAS_GPS
-    _items.push_back({"GPS Time", SettingType::TOGGLE,
+    _items.push_back({"GPS Time Sync", SettingType::TOGGLE,
         [&s]() { return s.gpsTimeEnabled ? 1 : 0; },
         [&s](int v) { s.gpsTimeEnabled = (v != 0); },
-        [](int v) { return v ? String("ON") : String("OFF"); }});
+        [](int v) { return String(onOff(v != 0)); }});
     idx++;
     _items.push_back({"GPS Location", SettingType::TOGGLE,
         [&s]() { return s.gpsLocationEnabled ? 1 : 0; },
         [&s](int v) { s.gpsLocationEnabled = (v != 0); },
-        [](int v) { return v ? String("ON") : String("OFF"); }});
+        [](int v) { return String(onOff(v != 0)); }});
     idx++;
 #endif
     _items.push_back({"Timezone", SettingType::INTEGER,
@@ -459,44 +803,49 @@ void LvSettingsScreen::buildItems() {
         },
         0, TIMEZONE_COUNT - 1, 1});
     idx++;
-    _items.push_back({"24h Time", SettingType::TOGGLE,
+    _items.push_back({"24-Hour Clock", SettingType::TOGGLE,
         [&s]() { return s.use24HourTime ? 1 : 0; },
         [&s](int v) { s.use24HourTime = (v != 0); },
-        [](int v) { return v ? String("ON") : String("OFF"); }});
+        [](int v) { return String(onOff(v != 0)); }});
     idx++;
-    _categories.push_back({"GPS/Time", gpsStart, idx - gpsStart,
+    _categories.push_back({"Time & Location", gpsStart, idx - gpsStart,
         [&s]() {
             if (s.timezoneIdx < TIMEZONE_COUNT)
                 return String(TIMEZONE_TABLE[s.timezoneIdx].label);
             return String("Not set");
         }});
 
-    // Audio
+    // Alerts & Audio
     int audioStart = idx;
-    _items.push_back({"Audio", SettingType::TOGGLE,
+    _items.push_back({"Audio Alerts", SettingType::TOGGLE,
         [&s]() { return s.audioEnabled ? 1 : 0; },
         [&s](int v) { s.audioEnabled = (v != 0); },
-        [](int v) { return v ? String("ON") : String("OFF"); }});
+        [](int v) { return String(onOff(v != 0)); }});
     idx++;
     _items.push_back({"Volume", SettingType::INTEGER,
         [&s]() { return s.audioVolume; }, [&s](int v) { s.audioVolume = v; },
         [](int v) { return String(v) + "%"; }, 0, 100, 10});
     idx++;
-    _categories.push_back({"Audio", audioStart, idx - audioStart,
-        [&s]() { return s.audioEnabled ? (String(s.audioVolume) + "%") : String("OFF"); }});
+    _categories.push_back({"Alerts & Audio", audioStart, idx - audioStart,
+        [&s]() -> String {
+            if (!s.audioEnabled) return String("Muted");
+            String summary = String("Volume ") + String(s.audioVolume);
+            summary += "%";
+            return summary;
+        }});
 
-    // Info (diagnostics moved from Home screen)
+    // Diagnostics
     int infoStart = idx;
-    _items.push_back({"Transport", SettingType::READONLY, nullptr, nullptr,
+    _items.push_back({"RNS Transport", SettingType::READONLY, nullptr, nullptr,
         [this](int) { return _rns && _rns->isTransportActive() ? String("ACTIVE") : String("OFFLINE"); }});
     idx++;
-    _items.push_back({"Paths", SettingType::READONLY, nullptr, nullptr,
+    _items.push_back({"Known Paths", SettingType::READONLY, nullptr, nullptr,
         [this](int) { return _rns ? String((int)_rns->pathCount()) : String("0"); }});
     idx++;
-    _items.push_back({"Links", SettingType::READONLY, nullptr, nullptr,
+    _items.push_back({"Live Links", SettingType::READONLY, nullptr, nullptr,
         [this](int) { return _rns ? String((int)_rns->linkCount()) : String("0"); }});
     idx++;
-    _items.push_back({"Radio", SettingType::READONLY, nullptr, nullptr,
+    _items.push_back({"LoRa Driver", SettingType::READONLY, nullptr, nullptr,
         [this](int) {
             if (_radio && _radio->isRadioOnline()) {
                 char buf[32];
@@ -526,10 +875,16 @@ void LvSettingsScreen::buildItems() {
             return String(m) + "m";
         }});
     idx++;
-    _categories.push_back({"Info", infoStart, idx - infoStart,
-        [this]() { return _rns && _rns->isTransportActive() ? String("ACTIVE") : String("OFFLINE"); }});
+    _categories.push_back({"Diagnostics", infoStart, idx - infoStart,
+        [this]() -> String {
+            if (!_rns || !_rns->isTransportActive()) return String("Transport offline");
+            String summary = String("Paths ") + String((int)_rns->pathCount());
+            summary += " / Links ";
+            summary += String((int)_rns->linkCount());
+            return summary;
+        }});
 
-    // System
+    // Storage & Maintenance
     int sysStart = idx;
     _items.push_back({"Free Heap", SettingType::READONLY, nullptr, nullptr,
         [](int) { return String((unsigned long)(ESP.getFreeHeap() / 1024)) + " KB"; }});
@@ -550,6 +905,11 @@ void LvSettingsScreen::buildItems() {
     _items.push_back({"SD Card", SettingType::READONLY, nullptr, nullptr,
         [this](int) { return _sd && _sd->isReady() ? String("Ready") : String("Not Found"); }});
     idx++;
+    _items.push_back({"SD Message Store", SettingType::TOGGLE,
+        [&s]() { return s.sdStorageEnabled ? 1 : 0; },
+        [&s](int v) { s.sdStorageEnabled = (v != 0); },
+        [](int v) { return String(onOff(v != 0)); }});
+    idx++;
     {
         SettingItem announceItem;
         announceItem.label = "Send Announce";
@@ -559,7 +919,7 @@ void LvSettingsScreen::buildItems() {
             if (_rns && _cfg) {
                 RNS::Bytes appData = encodeAnnounceName(_cfg->settings().displayName);
                 _rns->announce(appData);
-                if (_ui) { _ui->lvStatusBar().flashAnnounce(); _ui->lvStatusBar().showToast("Announce sent!"); }
+                if (_ui) { _ui->lvStatusBar().flashAnnounce(); _ui->lvStatusBar().showToast("Announce sent"); }
             } else {
                 if (_ui) _ui->lvStatusBar().showToast("RNS not ready");
             }
@@ -569,58 +929,69 @@ void LvSettingsScreen::buildItems() {
     }
     {
         SettingItem initSD;
-        initSD.label = "Init SD Card";
+        initSD.label = "Format SD Card";
         initSD.type = SettingType::ACTION;
-        initSD.formatter = [this](int) { return (_sd && _sd->isReady()) ? String("[Enter]") : String("No Card"); };
+        initSD.formatter = [this](int) {
+            if (!_sd || !_sd->isReady()) return String("No Card");
+            return _confirmingInitSD ? String("Hold") : String("Arm");
+        };
         initSD.action = [this]() {
             if (!_sd || !_sd->isReady()) { if (_ui) _ui->lvStatusBar().showToast("No SD card!", 1200); return; }
-            if (_ui) _ui->lvStatusBar().showToast("Initializing SD...", 2000);
-            bool ok = _sd->formatForRatdeck();
-            if (_ui) _ui->lvStatusBar().showToast(ok ? "SD initialized!" : "SD init failed!", 1500);
+            if (!_confirmingInitSD) {
+                clearConfirmations();
+                _confirmingInitSD = true;
+                if (_ui) _ui->lvStatusBar().showToast("Format SD armed. Hold to confirm", 5000);
+                rebuildItemList();
+                return;
+            }
+            if (_ui) _ui->lvStatusBar().showToast("Hold trackball to format SD", 2500);
         };
         _items.push_back(initSD);
         idx++;
     }
     {
         SettingItem wipeSD;
-        wipeSD.label = "Wipe SD Data";
+        wipeSD.label = "Erase Ratdeck SD Data";
         wipeSD.type = SettingType::ACTION;
-        wipeSD.formatter = [this](int) { return (_sd && _sd->isReady()) ? String("[Enter]") : String("No Card"); };
+        wipeSD.formatter = [this](int) {
+            if (!_sd || !_sd->isReady()) return String("No Card");
+            return _confirmingWipeSD ? String("Hold") : String("Arm");
+        };
         wipeSD.action = [this]() {
             if (!_sd || !_sd->isReady()) { if (_ui) _ui->lvStatusBar().showToast("No SD card!", 1200); return; }
-            if (_ui) _ui->lvStatusBar().showToast("Wiping SD data...", 2000);
-            bool ok = _sd->wipeRatdeck();
-            if (_ui) _ui->lvStatusBar().showToast(ok ? "SD wiped & reinit!" : "Wipe failed!", 1500);
+            if (!_confirmingWipeSD) {
+                clearConfirmations();
+                _confirmingWipeSD = true;
+                if (_ui) _ui->lvStatusBar().showToast("SD erase armed. Hold to confirm", 5000);
+                rebuildItemList();
+                return;
+            }
+            if (_ui) _ui->lvStatusBar().showToast("Hold trackball to erase SD data", 2500);
         };
         _items.push_back(wipeSD);
         idx++;
     }
     {
         SettingItem factoryReset;
-        factoryReset.label = "Factory Reset";
+        factoryReset.label = "Erase Device";
         factoryReset.type = SettingType::ACTION;
-        factoryReset.formatter = [this](int) { return _confirmingReset ? String("[Confirm?]") : String("[Enter]"); };
+        factoryReset.formatter = [this](int) { return _confirmingReset ? String("Hold") : String("Arm"); };
         factoryReset.action = [this]() {
             if (!_confirmingReset) {
+                clearConfirmations();
                 _confirmingReset = true;
-                if (_ui) _ui->lvStatusBar().showToast("Press again to confirm!", 2000);
+                if (_ui) _ui->lvStatusBar().showToast("Device erase armed. Hold to confirm", 5000);
                 rebuildItemList();
                 return;
             }
-            _confirmingReset = false;
-            if (_ui) _ui->lvStatusBar().showToast("Factory resetting...", 3000);
-            if (_sd && _sd->isReady()) _sd->wipeRatdeck();
-            if (_flash) _flash->format();
-            nvs_flash_erase();
-            delay(1500);  // Long enough for key state to clear before reboot
-            ESP.restart();
+            if (_ui) _ui->lvStatusBar().showToast("Hold trackball to erase device", 2500);
         };
         _items.push_back(factoryReset);
         idx++;
     }
     {
         SettingItem rebootItem;
-        rebootItem.label = "Reboot Device";
+        rebootItem.label = "Reboot Now";
         rebootItem.type = SettingType::ACTION;
         rebootItem.formatter = [](int) { return String("[Enter]"); };
         rebootItem.action = [this]() {
@@ -633,63 +1004,23 @@ void LvSettingsScreen::buildItems() {
     }
     {
         SettingItem updateCheck;
-        updateCheck.label = "Check for Updates";
+        updateCheck.label = "Check Firmware";
         updateCheck.type = SettingType::ACTION;
-        updateCheck.formatter = [](int) { return String("[Enter]"); };
+        updateCheck.formatter = [this](int) {
+            return _fwCheckState == FirmwareCheckState::RUNNING ? String("Checking") : String("[Enter]");
+        };
         updateCheck.action = [this]() {
-            if (WiFi.status() != WL_CONNECTED) {
-                if (_ui) _ui->lvStatusBar().showToast("Connect to WiFi to check!", 2000);
-                return;
-            }
-            if (_ui) _ui->lvStatusBar().showToast("Checking for updates...", 3000);
-
-            HTTPClient http;
-            http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-            http.setTimeout(8000);
-            http.begin("https://api.github.com/repos/ratspeak/ratdeck/releases/latest");
-            http.addHeader("Accept", "application/vnd.github.v3+json");
-            int httpCode = http.GET();
-
-            if (httpCode != 200) {
-                http.end();
-                if (_ui) _ui->lvStatusBar().showToast("Couldn't fetch data!", 2000);
-                return;
-            }
-
-            String payload = http.getString();
-            http.end();
-
-            JsonDocument doc;
-            if (deserializeJson(doc, payload)) {
-                if (_ui) _ui->lvStatusBar().showToast("Couldn't fetch data!", 2000);
-                return;
-            }
-
-            const char* tagName = doc["tag_name"] | "";
-            // Strip leading 'v' if present
-            const char* remoteVer = tagName;
-            if (remoteVer[0] == 'v' || remoteVer[0] == 'V') remoteVer++;
-
-            if (strlen(remoteVer) == 0) {
-                if (_ui) _ui->lvStatusBar().showToast("Couldn't fetch data!", 2000);
-                return;
-            }
-
-            // Compare versions (simple string compare works for semver)
-            int cmp = strcmp(remoteVer, RATDECK_VERSION_STRING);
-            if (cmp > 0) {
-                char msg[64];
-                snprintf(msg, sizeof(msg), "v%s available! Flash at ratspeak.org", remoteVer);
-                if (_ui) _ui->lvStatusBar().showToast(msg, 5000);
-            } else {
-                if (_ui) _ui->lvStatusBar().showToast("You're up to date!", 2000);
-            }
+            startFirmwareCheck();
+            rebuildItemList();
         };
         _items.push_back(updateCheck);
         idx++;
     }
-    _categories.push_back({"System", sysStart, idx - sysStart,
-        [](){ return String((unsigned long)(ESP.getFreeHeap() / 1024)) + " KB free"; }});
+    _categories.push_back({"Storage & Maintenance", sysStart, idx - sysStart,
+        [this](){
+            if (_rebootNeeded) return String("Reboot pending");
+            return (_sd && _sd->isReady()) ? String("SD ready") : String("Flash only");
+        }});
 }
 
 void LvSettingsScreen::createUI(lv_obj_t* parent) {
@@ -721,10 +1052,49 @@ void LvSettingsScreen::onEnter() {
     _selectedIdx = 0;
     _editing = false;
     _textEditing = false;
-    _confirmingReset = false;
-    _confirmingDevMode = false;
+    _wifiScanActive = false;
+    _wifiTargetSlot = 0;
+    clearConfirmations();
     _kbBrightness = _cfg ? _cfg->settings().keyboardBrightness : 0;
     rebuildCategoryList();
+}
+
+void LvSettingsScreen::refreshUI() {
+    FirmwareCheckState fwState = _fwCheckState;
+    if (fwState != FirmwareCheckState::IDLE && fwState != FirmwareCheckState::RUNNING) {
+        if (_ui) {
+            if (fwState == FirmwareCheckState::AVAILABLE) {
+                char msg[64];
+                snprintf(msg, sizeof(msg), "v%s available at ratspeak.org", _fwCheckVersion);
+                _ui->lvStatusBar().showToast(msg, 5000);
+            } else if (fwState == FirmwareCheckState::CURRENT) {
+                _ui->lvStatusBar().showToast("Firmware is current", 2000);
+            } else {
+                _ui->lvStatusBar().showToast("Couldn't fetch firmware", 2000);
+            }
+        }
+        _fwCheckState = FirmwareCheckState::IDLE;
+        if (_view == SettingsView::ITEM_LIST) rebuildItemList();
+    }
+
+    if (_view != SettingsView::WIFI_PICKER || !_wifiScanActive) return;
+    if (!WiFiInterface::isScanComplete()) return;
+
+    _wifiScanActive = false;
+    _wifiResults = WiFiInterface::getScanResults();
+    if (_wifiResults.empty() && _ui) {
+        _ui->lvStatusBar().showToast("No networks found", 1500);
+    }
+    rebuildWifiList();
+}
+
+void LvSettingsScreen::showWifiPicker() {
+    _wifiResults.clear();
+    _wifiPickerIdx = 0;
+    _wifiScanActive = true;
+    WiFiInterface::startAsyncScan();
+    _view = SettingsView::WIFI_PICKER;
+    rebuildWifiList();
 }
 
 void LvSettingsScreen::rebuildCategoryList() {
@@ -736,8 +1106,9 @@ void LvSettingsScreen::rebuildCategoryList() {
 
     // Title
     lv_obj_t* titleRow = lv_obj_create(_scrollContainer);
-    lv_obj_set_size(titleRow, Theme::CONTENT_W, 24);
-    lv_obj_set_style_bg_opa(titleRow, LV_OPA_TRANSP, 0);
+    lv_obj_set_size(titleRow, Theme::CONTENT_W, 26);
+    lv_obj_set_style_bg_color(titleRow, lv_color_hex(Theme::BG_ELEVATED), 0);
+    lv_obj_set_style_bg_opa(titleRow, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(titleRow, lv_color_hex(Theme::BORDER), 0);
     lv_obj_set_style_border_width(titleRow, 1, 0);
     lv_obj_set_style_border_side(titleRow, LV_BORDER_SIDE_BOTTOM, 0);
@@ -747,17 +1118,30 @@ void LvSettingsScreen::rebuildCategoryList() {
     lv_obj_t* titleLbl = lv_label_create(titleRow);
     lv_obj_set_style_text_font(titleLbl, font, 0);
     lv_obj_set_style_text_color(titleLbl, lv_color_hex(Theme::ACCENT), 0);
-    lv_label_set_text(titleLbl, "SETTINGS");
-    lv_obj_align(titleLbl, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_label_set_text(titleLbl, "SETTINGS DECK");
+    lv_obj_align(titleLbl, LV_ALIGN_LEFT_MID, 8, 0);
+
+    if (_rebootNeeded) {
+        lv_obj_t* pendingLbl = lv_label_create(titleRow);
+        lv_obj_set_style_text_font(pendingLbl, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(pendingLbl, lv_color_hex(Theme::WARNING_CLR), 0);
+        lv_label_set_text(pendingLbl, "REBOOT PENDING");
+        lv_obj_align(pendingLbl, LV_ALIGN_RIGHT_MID, -8, 0);
+    }
 
     for (int i = 0; i < (int)_categories.size(); i++) {
         auto& cat = _categories[i];
         bool selected = (i == _categoryIdx);
+        bool pending = categoryNeedsReboot(i);
 
         lv_obj_t* row = lv_obj_create(_scrollContainer);
-        lv_obj_set_size(row, Theme::CONTENT_W, 38);
+        lv_obj_set_size(row, Theme::CONTENT_W, 40);
         lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
         lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
+        lv_obj_set_style_bg_color(row, lv_color_hex(selected ? Theme::BG_HOVER : Theme::BG), 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(pending ? Theme::WARNING_CLR : Theme::BORDER), 0);
+        lv_obj_set_style_border_width(row, pending ? 2 : 1, 0);
+        lv_obj_set_style_border_side(row, pending ? (lv_border_side_t)(LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_BOTTOM) : LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
@@ -773,20 +1157,28 @@ void LvSettingsScreen::rebuildCategoryList() {
             lv_obj_scroll_to_view(lv_event_get_target(e), LV_ANIM_ON);
         }, LV_EVENT_FOCUSED, nullptr);
 
-        // Category name + count
-        char buf[48];
-        snprintf(buf, sizeof(buf), "%s (%d)", cat.name, cat.count);
+        // Category name
         lv_obj_t* nameLbl = lv_label_create(row);
         lv_obj_set_style_text_font(nameLbl, font, 0);
-        lv_obj_set_style_text_color(nameLbl, lv_color_hex(Theme::TEXT_PRIMARY), 0);
-        lv_label_set_text(nameLbl, buf);
+        lv_obj_set_style_text_color(nameLbl, lv_color_hex(pending ? Theme::WARNING_CLR : Theme::TEXT_PRIMARY), 0);
+        clipLabel(nameLbl, Theme::CONTENT_W - 72);
+        lv_label_set_text(nameLbl, cat.name);
         lv_obj_align(nameLbl, LV_ALIGN_TOP_LEFT, 12, 4);
+
+        char countBuf[8];
+        snprintf(countBuf, sizeof(countBuf), "%d", cat.count);
+        lv_obj_t* countLbl = lv_label_create(row);
+        lv_obj_set_style_text_font(countLbl, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(countLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
+        lv_label_set_text(countLbl, countBuf);
+        lv_obj_align(countLbl, LV_ALIGN_TOP_RIGHT, -24, 5);
 
         // Summary
         if (cat.summary) {
             lv_obj_t* sumLbl = lv_label_create(row);
             lv_obj_set_style_text_font(sumLbl, &lv_font_ratdeck_10, 0);
-            lv_obj_set_style_text_color(sumLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
+            lv_obj_set_style_text_color(sumLbl, lv_color_hex(pending ? Theme::WARNING_CLR : Theme::TEXT_MUTED), 0);
+            clipLabel(sumLbl, Theme::CONTENT_W - 44);
             lv_label_set_text(sumLbl, cat.summary().c_str());
             lv_obj_align(sumLbl, LV_ALIGN_BOTTOM_LEFT, 20, -4);
         }
@@ -794,8 +1186,8 @@ void LvSettingsScreen::rebuildCategoryList() {
         // Arrow
         lv_obj_t* arrow = lv_label_create(row);
         lv_obj_set_style_text_font(arrow, font, 0);
-        lv_obj_set_style_text_color(arrow, lv_color_hex(selected ? Theme::ACCENT : Theme::TEXT_MUTED), 0);
-        lv_label_set_text(arrow, ">");
+        lv_obj_set_style_text_color(arrow, lv_color_hex(pending ? Theme::WARNING_CLR : (selected ? Theme::ACCENT : Theme::TEXT_MUTED)), 0);
+        lv_label_set_text(arrow, pending ? "!" : ">");
         lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, -8, 0);
 
         _rowObjs.push_back(row);
@@ -817,8 +1209,9 @@ void LvSettingsScreen::rebuildItemList() {
 
     // Category header
     lv_obj_t* headerRow = lv_obj_create(_scrollContainer);
-    lv_obj_set_size(headerRow, Theme::CONTENT_W, 22);
-    lv_obj_set_style_bg_opa(headerRow, LV_OPA_TRANSP, 0);
+    lv_obj_set_size(headerRow, Theme::CONTENT_W, 24);
+    lv_obj_set_style_bg_color(headerRow, lv_color_hex(Theme::BG_ELEVATED), 0);
+    lv_obj_set_style_bg_opa(headerRow, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(headerRow, lv_color_hex(Theme::BORDER), 0);
     lv_obj_set_style_border_width(headerRow, 1, 0);
     lv_obj_set_style_border_side(headerRow, LV_BORDER_SIDE_BOTTOM, 0);
@@ -836,20 +1229,87 @@ void LvSettingsScreen::rebuildItemList() {
     lv_obj_t* headerLbl = lv_label_create(headerRow);
     lv_obj_set_style_text_font(headerLbl, font, 0);
     lv_obj_set_style_text_color(headerLbl, lv_color_hex(Theme::ACCENT), 0);
+    clipLabel(headerLbl, Theme::CONTENT_W - 128);
     lv_label_set_text(headerLbl, headerBuf);
-    lv_obj_align(headerLbl, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_align(headerLbl, LV_ALIGN_LEFT_MID, 8, 0);
+
+    if (_rebootNeeded) {
+        lv_obj_t* pendingLbl = lv_label_create(headerRow);
+        lv_obj_set_style_text_font(pendingLbl, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(pendingLbl, lv_color_hex(Theme::WARNING_CLR), 0);
+        lv_label_set_text(pendingLbl, "REBOOT NEEDED");
+        lv_obj_align(pendingLbl, LV_ALIGN_RIGHT_MID, -8, 0);
+    }
+
+    if (_rebootNeeded) {
+        lv_obj_t* notice = lv_obj_create(_scrollContainer);
+        lv_obj_set_size(notice, Theme::CONTENT_W, 20);
+        lv_obj_set_style_bg_color(notice, lv_color_hex(Theme::PRIMARY_SUBTLE), 0);
+        lv_obj_set_style_bg_opa(notice, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(notice, lv_color_hex(Theme::WARNING_CLR), 0);
+        lv_obj_set_style_border_width(notice, 1, 0);
+        lv_obj_set_style_border_side(notice, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_pad_all(notice, 0, 0);
+        lv_obj_set_style_radius(notice, 0, 0);
+        lv_obj_clear_flag(notice, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t* noticeLbl = lv_label_create(notice);
+        lv_obj_set_style_text_font(noticeLbl, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(noticeLbl, lv_color_hex(Theme::WARNING_CLR), 0);
+        clipLabel(noticeLbl, Theme::CONTENT_W - 16);
+        lv_label_set_text(noticeLbl, "Saved interface config is pending reboot");
+        lv_obj_align(noticeLbl, LV_ALIGN_LEFT_MID, 8, 0);
+    }
+
+    const char* confirmTitle = confirmationTitle();
+    const char* confirmDetail = confirmationDetail();
+    if (confirmTitle && confirmDetail) {
+        uint32_t confirmColor = _confirmingDevMode ? Theme::WARNING_CLR : Theme::ERROR_CLR;
+        lv_obj_t* confirm = lv_obj_create(_scrollContainer);
+        lv_obj_set_size(confirm, Theme::CONTENT_W, 34);
+        lv_obj_set_style_bg_color(confirm, lv_color_hex(Theme::BG_SURFACE), 0);
+        lv_obj_set_style_bg_opa(confirm, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(confirm, lv_color_hex(confirmColor), 0);
+        lv_obj_set_style_border_width(confirm, 2, 0);
+        lv_obj_set_style_border_side(confirm, (lv_border_side_t)(LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_BOTTOM), 0);
+        lv_obj_set_style_pad_all(confirm, 0, 0);
+        lv_obj_set_style_radius(confirm, 0, 0);
+        lv_obj_clear_flag(confirm, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t* confirmTitleLbl = lv_label_create(confirm);
+        lv_obj_set_style_text_font(confirmTitleLbl, &lv_font_ratdeck_12, 0);
+        lv_obj_set_style_text_color(confirmTitleLbl, lv_color_hex(confirmColor), 0);
+        clipLabel(confirmTitleLbl, Theme::CONTENT_W - 16);
+        lv_label_set_text(confirmTitleLbl, confirmTitle);
+        lv_obj_align(confirmTitleLbl, LV_ALIGN_TOP_LEFT, 8, 3);
+
+        lv_obj_t* confirmDetailLbl = lv_label_create(confirm);
+        lv_obj_set_style_text_font(confirmDetailLbl, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(confirmDetailLbl, lv_color_hex(Theme::TEXT_PRIMARY), 0);
+        clipLabel(confirmDetailLbl, Theme::CONTENT_W - 16);
+        lv_label_set_text(confirmDetailLbl, confirmDetail);
+        lv_obj_align(confirmDetailLbl, LV_ALIGN_BOTTOM_LEFT, 8, -3);
+    }
 
     for (int i = _catRangeStart; i < _catRangeEnd; i++) {
         const auto& item = _items[i];
         bool selected = (i == _selectedIdx);
         bool editable = isEditable(i);
+        bool rebootPending = settingNeedsReboot(item);
+        bool armed = armedAction(item);
+        bool destructive = destructiveAction(item);
+        uint32_t armedColor = destructive ? Theme::ERROR_CLR : Theme::WARNING_CLR;
 
         lv_obj_t* row = lv_obj_create(_scrollContainer);
-        lv_obj_set_size(row, Theme::CONTENT_W, 26);
+        lv_obj_set_size(row, Theme::CONTENT_W, 28);
         lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
         if (editable) {
             lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
         }
+        lv_obj_set_style_bg_color(row, lv_color_hex(armed ? Theme::BG_SURFACE : (selected && editable ? Theme::BG_HOVER : Theme::BG)), 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(armed ? armedColor : (rebootPending ? Theme::WARNING_CLR : Theme::BORDER)), 0);
+        lv_obj_set_style_border_width(row, rebootPending || armed ? 2 : 1, 0);
+        lv_obj_set_style_border_side(row, rebootPending || armed ? (lv_border_side_t)(LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_BOTTOM) : LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         if (editable) {
@@ -878,11 +1338,16 @@ void LvSettingsScreen::rebuildItemList() {
         // Label
         lv_obj_t* nameLbl = lv_label_create(row);
         lv_obj_set_style_text_font(nameLbl, font, 0);
-        lv_obj_set_style_text_color(nameLbl, lv_color_hex(
+        uint32_t nameColor =
+            armed ? armedColor :
+            rebootPending ? Theme::WARNING_CLR :
+            destructive ? Theme::ERROR_CLR :
             item.type == SettingType::ACTION ? Theme::TEXT_PRIMARY :
-            item.type == SettingType::READONLY ? Theme::TEXT_MUTED : Theme::TEXT_SECONDARY), 0);
+            item.type == SettingType::READONLY ? Theme::TEXT_MUTED : Theme::TEXT_SECONDARY;
+        lv_obj_set_style_text_color(nameLbl, lv_color_hex(nameColor), 0);
+        clipLabel(nameLbl, Theme::CONTENT_W - 136);
         lv_label_set_text(nameLbl, item.label);
-        lv_obj_align(nameLbl, LV_ALIGN_LEFT_MID, 4, 0);
+        lv_obj_align(nameLbl, LV_ALIGN_LEFT_MID, 8, 0);
 
         // Value
         String valStr;
@@ -912,7 +1377,7 @@ void LvSettingsScreen::rebuildItemList() {
                     break;
                 case SettingType::TEXT_INPUT: {
                     String v = item.textGetter ? item.textGetter() : "";
-                    valStr = v.isEmpty() ? "(not set)" : v;
+                    valStr = v.isEmpty() ? "(not set)" : (isWiFiPasswordLabel(item.label) ? maskedValue(v) : v);
                     valColor = v.isEmpty() ? Theme::TEXT_MUTED : Theme::PRIMARY;
                     break;
                 }
@@ -924,7 +1389,7 @@ void LvSettingsScreen::rebuildItemList() {
                     break;
                 case SettingType::ACTION:
                     valStr = item.formatter ? item.formatter(0) : "";
-                    valColor = Theme::TEXT_MUTED;
+                    valColor = destructive ? Theme::ERROR_CLR : Theme::TEXT_MUTED;
                     break;
                 default: {
                     int v = item.getter ? item.getter() : 0;
@@ -934,12 +1399,20 @@ void LvSettingsScreen::rebuildItemList() {
             }
         }
 
+        if (armed) {
+            valColor = armedColor;
+        } else if (rebootPending) {
+            valColor = Theme::WARNING_CLR;
+        }
+
         if (!valStr.isEmpty()) {
             lv_obj_t* valLbl = lv_label_create(row);
             lv_obj_set_style_text_font(valLbl, font, 0);
             lv_obj_set_style_text_color(valLbl, lv_color_hex(valColor), 0);
+            lv_obj_set_style_text_align(valLbl, LV_TEXT_ALIGN_RIGHT, 0);
+            clipLabel(valLbl, 124);
             lv_label_set_text(valLbl, valStr.c_str());
-            lv_obj_align(valLbl, LV_ALIGN_RIGHT_MID, -4, 0);
+            lv_obj_align(valLbl, LV_ALIGN_RIGHT_MID, -8, 0);
             // Cache value label for the actively edited item (in-place updates)
             if (i == _selectedIdx && (_textEditing || _freqEditing || _editing)) {
                 _editValueLbl = valLbl;
@@ -954,6 +1427,33 @@ void LvSettingsScreen::rebuildItemList() {
     if (focusOffset >= 0 && focusOffset < (int)_rowObjs.size()) {
         lv_group_focus_obj(_rowObjs[focusOffset]);
     }
+}
+
+void LvSettingsScreen::selectWifiResult(int resultIdx) {
+    if (!_cfg || resultIdx < 0 || resultIdx >= (int)_wifiResults.size()) return;
+
+    auto& net = _wifiResults[resultIdx];
+    auto& nets = _cfg->settings().wifiSTANetworks;
+    while (nets.size() <= _wifiTargetSlot && nets.size() < WIFI_STA_MAX_NETWORKS) {
+        nets.push_back({});
+    }
+    if (_wifiTargetSlot >= WIFI_STA_MAX_NETWORKS || _wifiTargetSlot >= nets.size()) {
+        if (_ui) _ui->lvStatusBar().showToast("Network slots full", 1500);
+        return;
+    }
+
+    for (size_t i = 0; i < nets.size(); i++) {
+        if (i != _wifiTargetSlot && !nets[i].ssid.isEmpty() && nets[i].ssid == net.ssid) {
+            if (_ui) _ui->lvStatusBar().showToast("Already saved", 1200);
+            return;
+        }
+    }
+
+    bool sameSSID = nets[_wifiTargetSlot].ssid == net.ssid;
+    nets[_wifiTargetSlot].ssid = net.ssid;
+    if (!sameSSID) nets[_wifiTargetSlot].password = "";
+    _cfg->settings().wifiSTASelected = (uint8_t)_wifiTargetSlot;
+    applyAndSave();
 }
 
 void LvSettingsScreen::rebuildWifiList() {
@@ -976,24 +1476,27 @@ void LvSettingsScreen::rebuildWifiList() {
     lv_obj_t* headerLbl = lv_label_create(headerRow);
     lv_obj_set_style_text_font(headerLbl, font, 0);
     lv_obj_set_style_text_color(headerLbl, lv_color_hex(Theme::ACCENT), 0);
-    lv_label_set_text(headerLbl, "< Select WiFi Network");
+    char header[48];
+    snprintf(header, sizeof(header), "< Scan for profile %u", (unsigned)(_wifiTargetSlot + 1));
+    lv_label_set_text(headerLbl, header);
     lv_obj_align(headerLbl, LV_ALIGN_LEFT_MID, 4, 0);
-
-    if (_wifiResults.empty()) {
-        lv_obj_t* emptyLbl = lv_label_create(_scrollContainer);
-        lv_obj_set_style_text_font(emptyLbl, font, 0);
-        lv_obj_set_style_text_color(emptyLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
-        lv_label_set_text(emptyLbl, "No networks found");
-        return;
-    }
 
     // Make header tappable to go back
     lv_obj_add_flag(headerRow, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(headerRow, [](lv_event_t* e) {
         auto* self = (LvSettingsScreen*)lv_event_get_user_data(e);
+        self->_wifiScanActive = false;
         self->_view = SettingsView::ITEM_LIST;
         self->rebuildItemList();
     }, LV_EVENT_CLICKED, this);
+
+    if (_wifiResults.empty()) {
+        lv_obj_t* emptyLbl = lv_label_create(_scrollContainer);
+        lv_obj_set_style_text_font(emptyLbl, font, 0);
+        lv_obj_set_style_text_color(emptyLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
+        lv_label_set_text(emptyLbl, _wifiScanActive ? "Scanning..." : "No networks found");
+        return;
+    }
 
     for (int i = 0; i < (int)_wifiResults.size(); i++) {
         auto& net = _wifiResults[i];
@@ -1011,10 +1514,8 @@ void LvSettingsScreen::rebuildWifiList() {
         lv_obj_add_event_cb(row, [](lv_event_t* e) {
             auto* self = (LvSettingsScreen*)lv_event_get_user_data(e);
             int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
-            if (idx < (int)self->_wifiResults.size()) {
-                auto& net = self->_wifiResults[idx];
-                if (self->_cfg) { self->_cfg->settings().wifiSTASSID = net.ssid; self->applyAndSave(); }
-            }
+            self->selectWifiResult(idx);
+            self->_wifiScanActive = false;
             self->_view = SettingsView::ITEM_LIST;
             self->rebuildItemList();
         }, LV_EVENT_CLICKED, this);
@@ -1047,18 +1548,20 @@ void LvSettingsScreen::rebuildWifiList() {
 
 void LvSettingsScreen::updateCategorySelection(int oldIdx, int newIdx) {
     if (oldIdx >= 0 && oldIdx < (int)_rowObjs.size()) {
+        bool pending = categoryNeedsReboot(oldIdx);
         lv_obj_set_style_bg_color(_rowObjs[oldIdx], lv_color_hex(Theme::BG), 0);
         lv_obj_t* nameLbl = lv_obj_get_child(_rowObjs[oldIdx], 0);
-        if (nameLbl) lv_obj_set_style_text_color(nameLbl, lv_color_hex(Theme::TEXT_PRIMARY), 0);
+        if (nameLbl) lv_obj_set_style_text_color(nameLbl, lv_color_hex(pending ? Theme::WARNING_CLR : Theme::TEXT_PRIMARY), 0);
         lv_obj_t* arrow = lv_obj_get_child(_rowObjs[oldIdx], -1);
-        if (arrow) lv_obj_set_style_text_color(arrow, lv_color_hex(Theme::TEXT_MUTED), 0);
+        if (arrow) lv_obj_set_style_text_color(arrow, lv_color_hex(pending ? Theme::WARNING_CLR : Theme::TEXT_MUTED), 0);
     }
     if (newIdx >= 0 && newIdx < (int)_rowObjs.size()) {
+        bool pending = categoryNeedsReboot(newIdx);
         lv_obj_set_style_bg_color(_rowObjs[newIdx], lv_color_hex(Theme::BG_HOVER), 0);
         lv_obj_t* nameLbl = lv_obj_get_child(_rowObjs[newIdx], 0);
-        if (nameLbl) lv_obj_set_style_text_color(nameLbl, lv_color_hex(Theme::TEXT_PRIMARY), 0);
+        if (nameLbl) lv_obj_set_style_text_color(nameLbl, lv_color_hex(pending ? Theme::WARNING_CLR : Theme::TEXT_PRIMARY), 0);
         lv_obj_t* arrow = lv_obj_get_child(_rowObjs[newIdx], -1);
-        if (arrow) lv_obj_set_style_text_color(arrow, lv_color_hex(Theme::PRIMARY), 0);
+        if (arrow) lv_obj_set_style_text_color(arrow, lv_color_hex(pending ? Theme::WARNING_CLR : Theme::PRIMARY), 0);
         lv_obj_scroll_to_view(_rowObjs[newIdx], LV_ANIM_OFF);
     }
 }
@@ -1069,9 +1572,12 @@ void LvSettingsScreen::updateItemSelection(int oldIdx, int newIdx) {
     int newRow = newIdx - _catRangeStart;
     auto setItemRowBg = [&](int row, bool selected) {
         if (row < 0 || row >= (int)_rowObjs.size()) return;
-        bool editable = isEditable(row + _catRangeStart);
+        int itemIdx = row + _catRangeStart;
+        bool editable = isEditable(itemIdx);
+        const auto& item = _items[itemIdx];
+        bool armed = armedAction(item);
         lv_obj_set_style_bg_color(_rowObjs[row], lv_color_hex(
-            (selected && editable) ? Theme::BG_HOVER : Theme::BG), 0);
+            armed ? Theme::BG_SURFACE : ((selected && editable) ? Theme::BG_HOVER : Theme::BG)), 0);
     };
     setItemRowBg(oldRow, false);
     setItemRowBg(newRow, true);
@@ -1112,8 +1618,7 @@ void LvSettingsScreen::exitToCategories() {
     _view = SettingsView::CATEGORY_LIST;
     _editing = false;
     _textEditing = false;
-    _confirmingReset = false;
-    _confirmingDevMode = false;
+    clearConfirmations();
     rebuildCategoryList();
 }
 
@@ -1134,14 +1639,14 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
         case SettingsView::ITEM_LIST: {
             if (_items.empty()) return false;
 
-            // Text edit mode — in-place label updates for responsiveness
+            // Text edit mode - in-place label updates for responsiveness
             if (_textEditing) {
                 auto& item = _items[_selectedIdx];
-                auto updateEditLabel = [this]() {
+                auto updateEditLabel = [this, &item]() {
                     if (_editValueLbl) {
                         String display = _editText + "_";
                         lv_label_set_text(_editValueLbl, display.c_str());
-                        lv_obj_align(_editValueLbl, LV_ALIGN_RIGHT_MID, -4, 0);
+                        lv_obj_align(_editValueLbl, LV_ALIGN_RIGHT_MID, -8, 0);
                     }
                 };
                 if (event.enter || event.character == '\n' || event.character == '\r') {
@@ -1163,13 +1668,13 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
                 return true;
             }
 
-            // Frequency digit-cursor edit mode — in-place label updates
+            // Frequency digit-cursor edit mode - in-place label updates
             if (_freqEditing) {
                 auto updateFreqLabel = [this]() {
                     if (_editValueLbl) {
                         String display = String("< ") + freqFormatWithCursor() + " >";
                         lv_label_set_text(_editValueLbl, display.c_str());
-                        lv_obj_align(_editValueLbl, LV_ALIGN_RIGHT_MID, -4, 0);
+                        lv_obj_align(_editValueLbl, LV_ALIGN_RIGHT_MID, -8, 0);
                     }
                 };
                 if (event.left) {
@@ -1257,8 +1762,20 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
                 return true;
             }
 
-            // Browse mode — LVGL focus group handles up/down
+            // Browse mode - LVGL focus group handles up/down
+            if (hasPendingConfirmation() && (event.up || event.down || event.left || event.right || event.tab)) {
+                clearConfirmations();
+                rebuildItemList();
+                if (_ui) _ui->lvStatusBar().showToast("Confirmation cancelled", 1000);
+                return true;
+            }
             if (event.del || event.character == 8 || event.character == 0x1B) {
+                if (hasPendingConfirmation()) {
+                    clearConfirmations();
+                    rebuildItemList();
+                    if (_ui) _ui->lvStatusBar().showToast("Confirmation cancelled", 1000);
+                    return true;
+                }
                 exitToCategories(); return true;
             }
             if (event.enter || event.character == '\n' || event.character == '\r') {
@@ -1268,30 +1785,22 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
                 if (!isEditable(_selectedIdx)) return true;
                 auto& item = _items[_selectedIdx];
                 if (item.type == SettingType::ACTION) {
+                    if (!confirmableAction(item)) clearConfirmations();
                     if (item.action) item.action();
-                    rebuildItemList();
+                    if (_view == SettingsView::ITEM_LIST) rebuildItemList();
                 } else if (item.type == SettingType::TEXT_INPUT) {
-                    if (strcmp(item.label, "WiFi SSID") == 0) {
-                        _wifiResults.clear();
-                        _wifiPickerIdx = 0;
-                        _wifiResults = WiFiInterface::scanNetworks();
-                        if (_wifiResults.empty()) {
-                            if (_ui) _ui->lvStatusBar().showToast("No networks found", 1500);
-                        } else {
-                            _view = SettingsView::WIFI_PICKER;
-                            rebuildWifiList();
-                        }
-                        return true;
-                    }
+                    clearConfirmations();
                     _textEditing = true;
                     _editText = item.textGetter ? item.textGetter() : "";
                     rebuildItemList();
                 } else if (item.type == SettingType::TOGGLE) {
+                    clearConfirmations();
                     int val = item.getter ? item.getter() : 0;
                     if (item.setter) item.setter(val ? 0 : 1);
                     applyAndSave();
                     rebuildItemList();
                 } else if (strcmp(item.label, "Frequency") == 0 && item.type == SettingType::INTEGER) {
+                    clearConfirmations();
                     // Radio-style digit cursor editor for frequency
                     _editing = true;
                     _editValue = item.getter ? item.getter() : 0;
@@ -1301,6 +1810,7 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
                     _freqEditing = true;
                     rebuildItemList();
                 } else {
+                    clearConfirmations();
                     _editing = true;
                     _numericTyping = false;
                     _editValue = item.getter ? item.getter() : 0;
@@ -1314,19 +1824,21 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
         case SettingsView::WIFI_PICKER: {
             // LVGL handles up/down navigation, click handler handles selection
             if (event.enter || event.character == '\n' || event.character == '\r') {
+                if (_wifiScanActive) return true;
                 lv_obj_t* focused = lv_group_get_focused(LvInput::group());
                 if (focused) {
                     int idx = (int)(intptr_t)lv_obj_get_user_data(focused);
                     if (idx < (int)_wifiResults.size()) {
-                        auto& net = _wifiResults[idx];
-                        if (_cfg) { _cfg->settings().wifiSTASSID = net.ssid; applyAndSave(); }
+                        selectWifiResult(idx);
                     }
                 }
+                _wifiScanActive = false;
                 _view = SettingsView::ITEM_LIST;
                 rebuildItemList();
                 return true;
             }
             if (event.del || event.character == 8 || event.character == 0x1B) {
+                _wifiScanActive = false;
                 _view = SettingsView::ITEM_LIST;
                 rebuildItemList();
                 return true;
@@ -1337,25 +1849,63 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
     return false;
 }
 
+bool LvSettingsScreen::handleLongPress() {
+    if (_view != SettingsView::ITEM_LIST || !hasPendingConfirmation()) return false;
+
+    int focusedIdx = _selectedIdx;
+    lv_obj_t* focused = lv_group_get_focused(LvInput::group());
+    if (focused) {
+        int candidate = (int)(intptr_t)lv_obj_get_user_data(focused);
+        if (candidate >= 0 && candidate < (int)_items.size()) focusedIdx = candidate;
+    }
+    if (focusedIdx < 0 || focusedIdx >= (int)_items.size()) return false;
+
+    const auto& item = _items[focusedIdx];
+    if (_confirmingInitSD && labelEq(item.label, "Format SD Card")) {
+        runFormatSD();
+        return true;
+    }
+    if (_confirmingWipeSD && labelEq(item.label, "Erase Ratdeck SD Data")) {
+        runWipeSD();
+        return true;
+    }
+    if (_confirmingReset && labelEq(item.label, "Erase Device")) {
+        runFactoryReset();
+        return true;
+    }
+    if (_confirmingDevMode && labelEq(item.label, "Developer Radio Controls")) {
+        runEnableDevMode();
+        return true;
+    }
+
+    if (_ui) _ui->lvStatusBar().showToast("Select armed action, then hold", 2000);
+    return true;
+}
+
 void LvSettingsScreen::snapshotRebootSettings() {
     if (!_cfg) return;
     auto& s = _cfg->settings();
     _rebootSnap.wifiMode = s.wifiMode;
-    _rebootSnap.wifiSTASSID = s.wifiSTASSID;
-    _rebootSnap.wifiSTAPassword = s.wifiSTAPassword;
-    _rebootSnap.bleEnabled = s.bleEnabled;
+    _rebootSnap.wifiSTANetworks = s.wifiSTANetworks;
+    _rebootSnap.wifiSTASelected = s.wifiSTASelected;
     _rebootSnap.autoIfaceEnabled = s.autoIfaceEnabled;
+    _rebootSnap.sdStorageEnabled = s.sdStorageEnabled;
     _gpsSnapEnabled = s.gpsTimeEnabled;
 }
 
 bool LvSettingsScreen::rebootSettingsChanged() const {
     if (!_cfg) return false;
     auto& s = _cfg->settings();
-    return s.wifiMode != _rebootSnap.wifiMode
-        || s.wifiSTASSID != _rebootSnap.wifiSTASSID
-        || s.wifiSTAPassword != _rebootSnap.wifiSTAPassword
-        || s.bleEnabled != _rebootSnap.bleEnabled
-        || s.autoIfaceEnabled != _rebootSnap.autoIfaceEnabled;
+    if (s.wifiMode != _rebootSnap.wifiMode) return true;
+    if (s.wifiSTASelected != _rebootSnap.wifiSTASelected) return true;
+    if (s.autoIfaceEnabled != _rebootSnap.autoIfaceEnabled) return true;
+    if (s.sdStorageEnabled != _rebootSnap.sdStorageEnabled) return true;
+    if (s.wifiSTANetworks.size() != _rebootSnap.wifiSTANetworks.size()) return true;
+    for (size_t i = 0; i < s.wifiSTANetworks.size(); i++) {
+        if (s.wifiSTANetworks[i].ssid != _rebootSnap.wifiSTANetworks[i].ssid) return true;
+        if (s.wifiSTANetworks[i].password != _rebootSnap.wifiSTANetworks[i].password) return true;
+    }
+    return false;
 }
 
 void LvSettingsScreen::snapshotTCPSettings() {
@@ -1461,15 +2011,15 @@ void LvSettingsScreen::applyAndSave() {
 
     // Check if reboot-required settings changed (show toast only on first detection)
     bool wasRebootNeeded = _rebootNeeded;
-    if (rebootSettingsChanged()) {
-        _rebootNeeded = true;
-    }
+    _rebootNeeded = rebootSettingsChanged();
 
     if (_ui) {
         if (_rebootNeeded && !wasRebootNeeded) {
-            _ui->lvStatusBar().showToast("WiFi changes apply on reboot", 2500);
+            _ui->lvStatusBar().showToast("Interface changes saved; reboot to apply", 3000);
+        } else if (!_rebootNeeded && wasRebootNeeded) {
+            _ui->lvStatusBar().showToast("Pending reboot cleared", 1500);
         } else if (tcpChanged) {
-            _ui->lvStatusBar().showToast("TCP Updated", 1200);
+            _ui->lvStatusBar().showToast("TCP relay updated", 1200);
         } else {
             _ui->lvStatusBar().showToast(saved ? "Saved" : "Applied", 800);
         }

@@ -3,22 +3,64 @@
 #include "config/Config.h"
 #include <Transport.h>
 #include <time.h>
+#include <algorithm>
 
 LXMFManager* LXMFManager::_instance = nullptr;
 std::map<std::string, LXMFManager::PendingProof> LXMFManager::_pendingProofs;
+
+namespace {
+constexpr unsigned long LXMF_DISCOVERY_RETRY_INTERVAL_MS = 10000;
+constexpr int LXMF_DISCOVERY_MAX_ATTEMPTS = 7;  // immediate attempt + six 10s retries ~= 60s
+constexpr unsigned long LXMF_LINK_ESTABLISH_TIMEOUT_MS = 30000;
+constexpr uint8_t LXMF_LINK_MAX_WAIT_ATTEMPTS = 6;
+}
 
 bool LXMFManager::begin(ReticulumManager* rns, MessageStore* store) {
     _rns = rns; _store = store; _instance = this;
     RNS::Destination& dest = _rns->destination();
     dest.set_packet_callback(onPacketReceived);
     dest.set_link_established_callback(onLinkEstablished);
+    if (_store) {
+        for (const auto& id : _store->loadRecentMessageIds(MAX_SEEN_IDS)) {
+            rememberMessageId(id);
+        }
+        std::vector<LXMFMessage> pending = _store->loadPendingOutgoing();
+        for (auto& msg : pending) {
+            if ((int)_outQueue.size() >= RATDECK_MAX_OUTQUEUE) break;
+            msg.lastRetryMs = 0;
+            _outQueue.push_back(msg);
+        }
+        if (!pending.empty()) {
+            Serial.printf("[LXMF] Restored %d pending outgoing messages\n", (int)_outQueue.size());
+        }
+    }
     Serial.println("[LXMF] Manager started");
     return true;
 }
 
+void LXMFManager::rememberMessageId(const std::string& msgIdHex) {
+    if (msgIdHex.empty() || _seenMessageIds.count(msgIdHex)) return;
+    _seenMessageIds.insert(msgIdHex);
+    _seenMessageOrder.push_back(msgIdHex);
+    while ((int)_seenMessageOrder.size() > MAX_SEEN_IDS) {
+        _seenMessageIds.erase(_seenMessageOrder.front());
+        _seenMessageOrder.pop_front();
+    }
+}
+
 void LXMFManager::loop() {
-    if (_outQueue.empty()) return;
     unsigned long now = millis();
+    for (auto it = _pendingProofs.begin(); it != _pendingProofs.end(); ) {
+        if ((now - it->second.createdMs) > 65000UL) {
+            std::string rh = it->first;
+            ++it;
+            handleProofTimeoutHash(rh);
+        } else {
+            ++it;
+        }
+    }
+
+    if (_outQueue.empty()) return;
     int processed = 0;
 
     for (auto it = _outQueue.begin(); it != _outQueue.end(); ) {
@@ -27,8 +69,13 @@ void LXMFManager::loop() {
 
         LXMFMessage& msg = *it;
 
-        // Per-message retry cooldown: 2 seconds between attempts
-        if (msg.retries > 0 && (millis() - msg.lastRetryMs) < 2000) { ++it; continue; }
+        // Keep unresolved peers from churning the UI loop or LoRa airtime.
+        // The first attempt is immediate; later path/identity retries happen
+        // every 10s and are capped in sendDirect().
+        if (msg.retries > 0 && (millis() - msg.lastRetryMs) < LXMF_DISCOVERY_RETRY_INTERVAL_MS) {
+            ++it;
+            continue;
+        }
 
         msg.lastRetryMs = millis();
 
@@ -46,8 +93,9 @@ void LXMFManager::loop() {
             }
 
             if (_statusCb) {
-                _statusCb(peerHex, msg.timestamp, msg.status);
+                _statusCb(peerHex, msg.timestamp, msg.savedCounter, msg.status);
             }
+            clearDeliveryPreference(msg);
             it = _outQueue.erase(it);
         } else {
             // sendDirect returned false — message stays in queue, try next
@@ -56,7 +104,8 @@ void LXMFManager::loop() {
     }
 }
 
-bool LXMFManager::sendMessage(const RNS::Bytes& destHash, const std::string& content, const std::string& title) {
+bool LXMFManager::sendMessage(const RNS::Bytes& destHash, const std::string& content, const std::string& title,
+                              DeliveryPreference preference) {
     LXMFMessage msg;
     msg.sourceHash = _rns->destination().hash();
     msg.destHash = destHash;
@@ -71,19 +120,77 @@ bool LXMFManager::sendMessage(const RNS::Bytes& destHash, const std::string& con
     msg.title = title;
     msg.incoming = false;
     msg.status = LXMFStatus::QUEUED;
-    if ((int)_outQueue.size() >= RATDECK_MAX_OUTQUEUE) { _outQueue.pop_front(); }
+
+    if ((int)_outQueue.size() >= RATDECK_MAX_OUTQUEUE) {
+        Serial.println("[LXMF] Outbound queue full; refusing new message");
+        return false;
+    }
+
+    std::vector<uint8_t> payload = msg.packFull(_rns->identity());
+    if (payload.empty()) {
+        Serial.println("[LXMF] Message pack failed");
+        return false;
+    }
+    if (payload.size() > RATDECK_LXMF_SINGLE_FRAME_MAX) {
+        msg.status = LXMFStatus::FAILED;
+        if (_store) _store->saveMessage(msg);
+        Serial.printf("[LXMF] Message too large for T-Deck safe path (%d > %d); resource transfer disabled\n",
+                      (int)payload.size(), RATDECK_LXMF_SINGLE_FRAME_MAX);
+        return true;
+    }
+    if (preference == DeliveryPreference::Link) {
+        _linkRequiredIds.insert(msg.messageId.toHex());
+        Serial.printf("[LXMF] Message %s queued for link delivery\n",
+                      msg.messageId.toHex().substr(0, 8).c_str());
+    }
+
     _outQueue.push_back(msg);
     // Immediately save with QUEUED status so it appears in getMessages() right away
     // Save the queue copy so savedCounter propagates back to the queued message
     if (_store) { _store->saveMessage(_outQueue.back()); }
 
-    // Proactively request path so it's ready when sendDirect runs
     if (!RNS::Transport::has_path(destHash)) {
-        RNS::Transport::request_path(destHash);
-        Serial.printf("[LXMF] Message queued for %s — requesting path\n",
+        Serial.printf("[LXMF] Message queued for %s; path discovery will retry every 10s\n",
                       destHash.toHex().substr(0, 8).c_str());
     }
     return true;
+}
+
+bool LXMFManager::sendMessageViaLink(const RNS::Bytes& destHash, const std::string& content,
+                                     const std::string& title) {
+    return sendMessage(destHash, content, title, DeliveryPreference::Link);
+}
+
+void LXMFManager::clearDeliveryPreference(const LXMFMessage& msg) {
+    std::string msgId = msg.messageId.toHex();
+    if (msgId.empty()) return;
+    _linkRequiredIds.erase(msgId);
+    _linkWaitAttempts.erase(msgId);
+}
+
+bool LXMFManager::ensureOutboundLink(const RNS::Destination& dest, const RNS::Bytes& destHash,
+                                     const char* reason) {
+    if (_outLink && _outLinkDestHash == destHash
+        && _outLink.status() == RNS::Type::Link::ACTIVE) {
+        return true;
+    }
+
+    unsigned long now = millis();
+    bool samePending = _outLinkPending && _outLinkPendingHash == destHash;
+    bool pendingAlive = samePending && _outLink
+        && _outLink.status() != RNS::Type::Link::CLOSED
+        && (now - _outLinkPendingSinceMs) < LXMF_LINK_ESTABLISH_TIMEOUT_MS;
+    if (pendingAlive) return false;
+
+    _outLinkPendingHash = destHash;
+    _outLinkDestHash = destHash;
+    _outLinkPending = true;
+    _outLinkPendingSinceMs = now;
+    Serial.printf("[LXMF] Establishing link to %s for %s\n",
+                  destHash.toHex().substr(0, 8).c_str(), reason ? reason : "delivery");
+    RNS::Link newLink(dest, onOutLinkEstablished, onOutLinkClosed);
+    _outLink = newLink;
+    return false;
 }
 
 bool LXMFManager::sendDirect(LXMFMessage& msg) {
@@ -96,30 +203,34 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
     // allow a new link attempt. Covers: link object destroyed (NONE), timed out, or failed.
     if (_outLinkPending) {
         bool linkReady = _outLink && _outLink.status() == RNS::Type::Link::ACTIVE;
-        if (!linkReady) {
+        bool linkClosed = !_outLink || _outLink.status() == RNS::Type::Link::CLOSED;
+        bool linkTimedOut = _outLinkPendingSinceMs > 0
+            && (millis() - _outLinkPendingSinceMs) >= LXMF_LINK_ESTABLISH_TIMEOUT_MS;
+        if (linkReady) {
+            _outLinkPending = false;
+        } else if (linkClosed || linkTimedOut) {
             _outLinkPending = false;
             _outLink = {RNS::Type::NONE};
-            Serial.println("[LXMF] Clearing stale link-pending (link not active)");
+            _outLinkPendingSinceMs = 0;
+            Serial.println("[LXMF] Clearing stale link-pending");
         }
     }
 
     RNS::Identity recipientId = RNS::Identity::recall(msg.destHash);
     if (!recipientId) {
         msg.retries++;
-        // Request path on first retry and every 10 retries
-        if (msg.retries == 1 || msg.retries % 10 == 0) {
-            Serial.printf("[LXMF] Requesting path for %s\n",
-                          msg.destHash.toHex().substr(0, 8).c_str());
-            RNS::Transport::request_path(msg.destHash);
-        }
-        if (msg.retries >= 30) {
-            Serial.printf("[LXMF] recall FAILED for %s after %d retries — marking FAILED\n",
+        Serial.printf("[LXMF] Requesting path/identity for %s (attempt %d/%d)\n",
+                      msg.destHash.toHex().substr(0, 8).c_str(),
+                      msg.retries, LXMF_DISCOVERY_MAX_ATTEMPTS);
+        RNS::Transport::request_path(msg.destHash);
+        if (msg.retries >= LXMF_DISCOVERY_MAX_ATTEMPTS) {
+            Serial.printf("[LXMF] No identity/path for %s after ~60s — marking FAILED\n",
                           msg.destHash.toHex().substr(0, 8).c_str(), msg.retries);
             msg.status = LXMFStatus::FAILED;
             return true;
         }
-        Serial.printf("[LXMF] recall pending for %s (retry %d/30) — identity not known yet\n",
-                      msg.destHash.toHex().substr(0, 8).c_str(), msg.retries);
+        Serial.printf("[LXMF] recall pending for %s — identity not known yet\n",
+                      msg.destHash.toHex().substr(0, 8).c_str());
         return false;  // keep in queue, retry next loop
     }
     Serial.printf("[LXMF] recall OK: identity=%s\n", recipientId.hexhash().c_str());
@@ -128,13 +239,12 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
     // Header1 which the Python hub silently drops
     if (!RNS::Transport::has_path(msg.destHash)) {
         msg.retries++;
-        if (msg.retries == 1 || msg.retries % 5 == 0) {
-            Serial.printf("[LXMF] No path for %s, requesting (retry %d)\n",
-                          msg.destHash.toHex().substr(0, 8).c_str(), msg.retries);
-            RNS::Transport::request_path(msg.destHash);
-        }
-        if (msg.retries >= 30) {
-            Serial.printf("[LXMF] No path for %s after %d retries — FAILED\n",
+        Serial.printf("[LXMF] No path for %s, requesting (attempt %d/%d)\n",
+                      msg.destHash.toHex().substr(0, 8).c_str(),
+                      msg.retries, LXMF_DISCOVERY_MAX_ATTEMPTS);
+        RNS::Transport::request_path(msg.destHash);
+        if (msg.retries >= LXMF_DISCOVERY_MAX_ATTEMPTS) {
+            Serial.printf("[LXMF] No path for %s after ~60s — FAILED\n",
                           msg.destHash.toHex().substr(0, 8).c_str(), msg.retries);
             msg.status = LXMFStatus::FAILED;
             return true;
@@ -155,6 +265,14 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
     // packFull returns opportunistic format: [src:16][sig:64][msgpack]
     std::vector<uint8_t> payload = msg.packFull(_rns->identity());
     if (payload.empty()) { Serial.println("[LXMF] packFull returned empty!"); msg.status = LXMFStatus::FAILED; return true; }
+    const std::string msgIdHex = msg.messageId.toHex();
+    const bool requireLink = _linkRequiredIds.count(msgIdHex) > 0;
+    if (payload.size() > RATDECK_LXMF_SINGLE_FRAME_MAX) {
+        Serial.printf("[LXMF] Refusing resource-sized message (%d bytes); T-Deck safe cap is %d\n",
+                      (int)payload.size(), RATDECK_LXMF_SINGLE_FRAME_MAX);
+        msg.status = LXMFStatus::FAILED;
+        return true;
+    }
 
     msg.status = LXMFStatus::SENDING;
     bool sent = false;
@@ -174,7 +292,12 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
                           (int)linkBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
             RNS::Packet packet(_outLink, linkBytes);
             RNS::PacketReceipt receipt = packet.send();
-            if (receipt) { sent = true; registerProofTracking(receipt, msg); }
+            if (receipt) {
+                // microReticulum currently does not validate link-packet delivery
+                // proofs, so keep link sends at SENT until upstream proof callbacks
+                // are protocol-correct.
+                sent = true;
+            }
         } else {
             // Too large for single packet — use Resource transfer (chunked).
             // No DELIVERED transition for this path: microReticulum's Transport
@@ -192,15 +315,30 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
         }
     }
 
-    // Fallback: opportunistic or queue for link-based resource transfer
+    // Fallback: opportunistic, or wait for a link if the UI explicitly requested it.
     if (!sent) {
         RNS::Bytes payloadBytes(payload.data(), payload.size());
+        if (requireLink) {
+            ensureOutboundLink(outDest, msg.destHash, "requested link send");
+            uint8_t attempts = ++_linkWaitAttempts[msgIdHex];
+            msg.retries++;
+            if (attempts >= LXMF_LINK_MAX_WAIT_ATTEMPTS) {
+                Serial.printf("[LXMF] Link for %s not established after %u attempts — FAILED\n",
+                              msg.destHash.toHex().substr(0, 8).c_str(), (unsigned)attempts);
+                msg.status = LXMFStatus::FAILED;
+                return true;
+            }
+            Serial.printf("[LXMF] Waiting for link to %s before send (%u/%u)\n",
+                          msg.destHash.toHex().substr(0, 8).c_str(),
+                          (unsigned)attempts, (unsigned)LXMF_LINK_MAX_WAIT_ATTEMPTS);
+            return false;
+        }
+
         // Use opportunistic only for packets that fit in a single LoRa frame (254 bytes).
         // Larger packets require split-frame over LoRa, which is unreliable — any single
         // frame loss (CRC error, collision, half-duplex timing) kills the entire transfer
         // with no recovery. Link-based delivery handles retransmission at the protocol level.
-        static constexpr size_t SINGLE_FRAME_MAX = 254;
-        if (payloadBytes.size() <= SINGLE_FRAME_MAX) {
+        if (payloadBytes.size() <= RATDECK_LXMF_SINGLE_FRAME_MAX) {
             // Fits in single LoRa frame — send opportunistic
             Serial.printf("[LXMF] sending opportunistic: %d bytes to %s\n",
                           (int)payloadBytes.size(), outDest.hash().toHex().substr(0, 12).c_str());
@@ -210,14 +348,10 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
         } else {
             // Too large for single frame — need link + resource transfer
             Serial.printf("[LXMF] Message needs link delivery (%d bytes > %d single-frame), retry %d\n",
-                          (int)payloadBytes.size(), (int)SINGLE_FRAME_MAX, msg.retries);
+                          (int)payloadBytes.size(), RATDECK_LXMF_SINGLE_FRAME_MAX, msg.retries);
             if (msg.retries % 3 == 0 && (!_outLink || _outLinkDestHash != msg.destHash
                 || _outLink.status() != RNS::Type::Link::ACTIVE)) {
-                _outLinkPendingHash = msg.destHash;
-                _outLinkPending = true;
-                Serial.printf("[LXMF] Establishing link to %s for resource transfer\n",
-                              msg.destHash.toHex().substr(0, 8).c_str());
-                RNS::Link newLink(outDest, onOutLinkEstablished, onOutLinkClosed);
+                ensureOutboundLink(outDest, msg.destHash, "resource transfer");
             }
             msg.retries++;
             if (msg.retries >= 30) {
@@ -263,6 +397,7 @@ void LXMFManager::onOutLinkEstablished(RNS::Link& link) {
     _instance->_outLink = link;
     _instance->_outLinkDestHash = _instance->_outLinkPendingHash;
     _instance->_outLinkPending = false;
+    _instance->_outLinkPendingSinceMs = 0;
     Serial.printf("[LXMF] Outbound link established to %s\n",
                   _instance->_outLinkDestHash.toHex().substr(0, 8).c_str());
 }
@@ -271,6 +406,7 @@ void LXMFManager::onOutLinkClosed(RNS::Link& link) {
     if (!_instance) return;
     _instance->_outLink = {RNS::Type::NONE};
     _instance->_outLinkPending = false;
+    _instance->_outLinkPendingSinceMs = 0;
     Serial.println("[LXMF] Outbound link closed");
 }
 
@@ -310,15 +446,17 @@ void LXMFManager::processIncoming(const uint8_t* data, size_t len, const RNS::By
                       msg.sourceHash.toHex().substr(0, 8).c_str());
         return;
     }
-    _seenMessageIds.insert(msgIdHex);
-    if ((int)_seenMessageIds.size() > MAX_SEEN_IDS) {
-        _seenMessageIds.erase(_seenMessageIds.begin());
-    }
+    rememberMessageId(msgIdHex);
 
     // Only overwrite destHash if caller provided a real one (non-link delivery).
     // For link delivery, unpackFull already parsed the correct destHash from the payload.
     if (destHash.size() > 0) {
         msg.destHash = destHash;
+    }
+    if (_rns && msg.destHash != _rns->destination().hash()) {
+        Serial.printf("[LXMF] Dropping message for wrong destination %s\n",
+                      msg.destHash.toHex().substr(0, 8).c_str());
+        return;
     }
     // Use local receive time for incoming messages so all timestamps in
     // the conversation reflect THIS device's clock, not the sender's.
@@ -362,10 +500,30 @@ void LXMFManager::markRead(const std::string& peerHex) {
     if (_store) { _store->markConversationRead(peerHex); }
 }
 
+bool LXMFManager::deleteConversation(const std::string& peerHex) {
+    for (auto it = _outQueue.begin(); it != _outQueue.end(); ) {
+        if (it->destHash.toHex() == peerHex) it = _outQueue.erase(it);
+        else ++it;
+    }
+    for (auto it = _pendingProofs.begin(); it != _pendingProofs.end(); ) {
+        if (it->second.peerHex == peerHex) it = _pendingProofs.erase(it);
+        else ++it;
+    }
+    return _store ? _store->deleteConversation(peerHex) : false;
+}
+
 void LXMFManager::registerProofTracking(RNS::PacketReceipt& receipt, const LXMFMessage& msg) {
     if (!receipt) return;
     std::string rh = receipt.hash().toHex();
-    _pendingProofs[rh] = { msg.destHash.toHex(), msg.timestamp };
+    PendingProof pending;
+    pending.peerHex = msg.destHash.toHex();
+    pending.timestamp = msg.timestamp;
+    pending.savedCounter = msg.savedCounter;
+    pending.createdMs = millis();
+    pending.proofAttempts = (uint8_t)std::min(msg.retries, 255);
+    pending.msg = msg;
+    pending.msg.status = LXMFStatus::SENT;
+    _pendingProofs[rh] = pending;
     receipt.set_delivery_callback(&LXMFManager::onProofDelivered);
     receipt.set_timeout(60);
     receipt.set_timeout_callback(&LXMFManager::onProofTimeout);
@@ -380,19 +538,54 @@ void LXMFManager::onProofDelivered(const RNS::PacketReceipt& r) {
     _pendingProofs.erase(it);
 
     if (_instance->_store) {
-        _instance->_store->updateMessageStatus(p.peerHex, p.timestamp, false, LXMFStatus::DELIVERED);
+        if (p.savedCounter > 0) {
+            _instance->_store->updateMessageStatusByCounter(p.peerHex, p.savedCounter, false, LXMFStatus::DELIVERED);
+        } else {
+            _instance->_store->updateMessageStatus(p.peerHex, p.timestamp, false, LXMFStatus::DELIVERED);
+        }
     }
     if (_instance->_statusCb) {
-        _instance->_statusCb(p.peerHex, p.timestamp, LXMFStatus::DELIVERED);
+        _instance->_statusCb(p.peerHex, p.timestamp, p.savedCounter, LXMFStatus::DELIVERED);
     }
     Serial.printf("[LXMF] DELIVERED proof for %s @ %.0f\n",
                   p.peerHex.substr(0, 12).c_str(), p.timestamp);
 }
 
 void LXMFManager::onProofTimeout(const RNS::PacketReceipt& r) {
-    // No proof within window — leave status as SENT (over LoRa, lack of
-    // proof doesn't mean undelivered). Just clear the pending entry so the
-    // map doesn't leak.
+    handleProofTimeoutHash(r.hash().toHex());
+}
+
+void LXMFManager::handleProofTimeoutHash(const std::string& receiptHash) {
     if (!_instance) return;
-    _pendingProofs.erase(r.hash().toHex());
+    auto it = _pendingProofs.find(receiptHash);
+    if (it == _pendingProofs.end()) return;
+    PendingProof p = it->second;
+    _pendingProofs.erase(it);
+
+    p.proofAttempts++;
+    bool retry = p.proofAttempts < 3 && (int)_instance->_outQueue.size() < RATDECK_MAX_OUTQUEUE;
+    LXMFStatus nextStatus = retry ? LXMFStatus::QUEUED : LXMFStatus::FAILED;
+
+    if (_instance->_store) {
+        if (p.savedCounter > 0) {
+            _instance->_store->updateMessageStatusByCounter(p.peerHex, p.savedCounter, false, nextStatus);
+        } else {
+            _instance->_store->updateMessageStatus(p.peerHex, p.timestamp, false, nextStatus);
+        }
+    }
+    if (_instance->_statusCb) {
+        _instance->_statusCb(p.peerHex, p.timestamp, p.savedCounter, nextStatus);
+    }
+
+    if (retry) {
+        p.msg.status = LXMFStatus::QUEUED;
+        p.msg.retries = p.proofAttempts;
+        p.msg.lastRetryMs = 0;
+        _instance->_outQueue.push_back(p.msg);
+        Serial.printf("[LXMF] Proof timeout; requeued %s attempt %u/3\n",
+                      p.peerHex.substr(0, 8).c_str(), (unsigned)p.proofAttempts + 1);
+    } else {
+        Serial.printf("[LXMF] Proof timeout; marking FAILED for %s\n",
+                      p.peerHex.substr(0, 8).c_str());
+    }
 }

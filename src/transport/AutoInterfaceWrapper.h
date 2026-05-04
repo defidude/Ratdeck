@@ -11,13 +11,13 @@
  * (peer_count, multicast_address, online flag) for the UI / heartbeat.
  *
  * Use:
- *   1. wifi STA connects → resolve link-local IPv6 + scope id
+ *   1. wifi STA connects -> resolve link-local IPv6 + scope id
  *   2. wrapper.start(group_id, max_peers, link_local, scope_id)
  *   3. wrapper.loop() each main-loop tick
- *   4. periodically poll WiFi.localIPv6() and call notifyLinkChange() —
+ *   4. periodically poll WiFi.localIPv6() and call notifyLinkChange() -
  *      catches SLAAC privacy-address rotation while STA stays associated;
  *      idempotent at the library layer (no socket churn unless changed)
- *   5. on STA disconnect → wrapper.stop()
+ *   5. on STA disconnect -> wrapper.stop()
  */
 class AutoInterfaceWrapper {
 public:
@@ -37,5 +37,9 @@ private:
 	std::shared_ptr<RNS::AutoInterface> _impl;
 	RNS::Interface _wrapper{RNS::Type::NONE};
 	std::string    _empty_addr;  // sentinel returned when not started
+	String         _groupId;
+	String         _linkLocalAddr;
+	uint32_t       _scopeId = 0;
+	uint8_t        _maxPeers = 0;
 	bool _started = false;
 };

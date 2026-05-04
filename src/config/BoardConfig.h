@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-// RatDeck — LilyGo T-Deck Plus Pin Definitions
+// Ratdeck — LilyGo T-Deck Plus Pin Definitions
 // =============================================================================
 
 // --- Power Control ---

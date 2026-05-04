@@ -95,11 +95,59 @@ void AudioNotify::writeSilence(uint16_t durationMs) {
 }
 
 void AudioNotify::playMessage() {
+    if (!_enabled || !_i2sReady) return;
+
+    const int sr = AUDIO_SAMPLE_RATE;
+    const int toneMs = 34;
+    const int gapMs = 28;
+    const int tailMs = 16;
+    const int totalMs = toneMs + gapMs + toneMs + tailMs;
+    const int totalSamples = sr * totalMs / 1000;
+
+    int16_t* buf = (int16_t*)ps_malloc(totalSamples * sizeof(int16_t));
+    if (!buf) buf = (int16_t*)malloc(totalSamples * sizeof(int16_t));
+    if (!buf) return;
+    memset(buf, 0, totalSamples * sizeof(int16_t));
+
+    float vol = (_volume / 100.0f) * 12000.0f;
+    int pos = 0;
+
+    auto addTone = [&](float freq, int ms) {
+        int n = sr * ms / 1000;
+        int fadeN = sr * 5 / 1000;
+        if (fadeN < 1) fadeN = 1;
+        for (int i = 0; i < n && (pos + i) < totalSamples; i++) {
+            float t = (float)i / sr;
+            float s = sinf(2.0f * M_PI * freq * t) * 0.80f
+                    + sinf(2.0f * M_PI * freq * 2.0f * t) * 0.15f
+                    + sinf(2.0f * M_PI * freq * 3.0f * t) * 0.05f;
+            float env = 1.0f;
+            if (i < fadeN) env = (float)i / fadeN;
+            if (i > n - fadeN) env = (float)(n - i) / fadeN;
+            buf[pos + i] = (int16_t)(s * env * vol);
+        }
+        pos += n;
+    };
+
+    addTone(1000.0f, toneMs);
+    pos += sr * gapMs / 1000;
+    addTone(1000.0f, toneMs);
+    pos += sr * tailMs / 1000;
+
+    size_t written = 0;
+    i2s_write(I2S_PORT, buf, totalSamples * sizeof(int16_t), &written, pdMS_TO_TICKS(150));
+    free(buf);
+}
+
+void AudioNotify::requestMessage() {
     if (!_enabled) return;
-    writeTone(1000, 50);
-    writeSilence(50);
-    writeTone(1000, 50);
-    writeSilence(30);
+    _messagePending = true;
+}
+
+void AudioNotify::loop() {
+    if (!_messagePending) return;
+    _messagePending = false;
+    playMessage();
 }
 
 void AudioNotify::playAnnounce() {

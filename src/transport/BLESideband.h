@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/Config.h"
+
+#if HAS_BLE
+
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <vector>
@@ -49,6 +53,7 @@ private:
 
     // Queued incoming packets
     std::vector<std::vector<uint8_t>> _incomingPackets;
+    SemaphoreHandle_t _packetsMutex = nullptr;
     PacketCallback _packetCb;
 
     // KISS constants
@@ -63,3 +68,5 @@ private:
     static constexpr const char* NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
     static constexpr const char* NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 };
+
+#endif

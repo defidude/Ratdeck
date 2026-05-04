@@ -57,4 +57,10 @@ private:
     static constexpr unsigned long ENTER_GUARD_MS = 600;
 
     lv_obj_t* _roller = nullptr;
+    lv_obj_t* _upButton = nullptr;
+    lv_obj_t* _downButton = nullptr;
+    lv_obj_t* _doneButton = nullptr;
+
+    void stepSelection(int delta);
+    void submit(bool enforceEnterGuard);
 };

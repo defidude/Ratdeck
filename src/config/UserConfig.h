@@ -10,6 +10,13 @@
 
 enum RatWiFiMode : uint8_t { RAT_WIFI_OFF = 0, RAT_WIFI_AP = 1, RAT_WIFI_STA = 2 };
 
+struct WiFiNetwork {
+    String ssid;
+    String password;
+};
+
+constexpr size_t WIFI_STA_MAX_NETWORKS = 3;
+
 struct TCPEndpoint {
     String host;
     uint16_t port = TCP_DEFAULT_PORT;
@@ -30,8 +37,8 @@ struct UserSettings {
     RatWiFiMode wifiMode = RAT_WIFI_STA;
     String wifiAPSSID;
     String wifiAPPassword = WIFI_AP_PASSWORD;
-    String wifiSTASSID;
-    String wifiSTAPassword;
+    std::vector<WiFiNetwork> wifiSTANetworks;
+    uint8_t wifiSTASelected = 0;
 
     // AutoInterface (Reticulum LAN auto-discovery via IPv6 multicast).
     // Active only in STA mode; opt-in until proven stable on real APs.
@@ -49,7 +56,7 @@ struct UserSettings {
     bool denseFontMode = false;       // T-Deck Plus: adaptive font toggle
 
     // Keyboard
-    uint8_t keyboardBrightness = 100; // Percentage 1-100
+    uint8_t keyboardBrightness = 100; // Percentage 0-100 (0 = off)
     bool keyboardAutoOn = false;      // Backlight ON when switching to ACTIVE power state
     bool keyboardAutoOff = false;     // Backlight OFF when switching from ACTIVE power state
 
@@ -76,8 +83,11 @@ struct UserSettings {
     // Identity
     String displayName;
 
+    // Storage
+    bool sdStorageEnabled = false;   // Removable SD stores plaintext unless explicitly enabled
+
     // Announce
-    uint16_t announceInterval = 5; // minutes, 5-360
+    uint16_t announceInterval = 30; // minutes, 30-360
 
     // Developer mode — unlocks custom radio parameters
     bool devMode = false;

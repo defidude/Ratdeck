@@ -40,6 +40,80 @@ size_t LittleFSFileSystem::write_file(const char* p, const RNS::Bytes& data) {
 // Without this, write_path_table always logs "serialize failed" because the
 // default stub returns NONE, and the path table never persists across reboots.
 namespace {
+constexpr size_t RNS_COPY_CHUNK = 512;
+
+bool copySDToFlash(const char* sdPath, const char* flashPath) {
+    File in = SD.open(sdPath, FILE_READ);
+    if (!in) return false;
+
+    String path = String(flashPath);
+    int lastSlash = path.lastIndexOf('/');
+    if (lastSlash > 0) {
+        String dir = path.substring(0, lastSlash);
+        if (!LittleFS.exists(dir.c_str())) LittleFS.mkdir(dir.c_str());
+    }
+
+    File out = LittleFS.open(flashPath, "w");
+    if (!out) { in.close(); return false; }
+
+    uint8_t buf[RNS_COPY_CHUNK];
+    bool ok = true;
+    while (in.available()) {
+        size_t n = in.read(buf, sizeof(buf));
+        if (n == 0) break;
+        if (out.write(buf, n) != n) { ok = false; break; }
+        RNS::Utilities::OS::reset_watchdog();
+    }
+    in.close();
+    out.close();
+    if (!ok) LittleFS.remove(flashPath);
+    return ok;
+}
+
+bool copyFlashToSD(SDStore* sd, const char* flashPath, const char* sdPath) {
+    if (!sd || !sd->isReady()) return false;
+    File in = LittleFS.open(flashPath, "r");
+    if (!in || in.size() == 0) { if (in) in.close(); return false; }
+
+    String path = String(sdPath);
+    int lastSlash = path.lastIndexOf('/');
+    if (lastSlash > 0) {
+        String dir = path.substring(0, lastSlash);
+        if (!sd->ensureDir(dir.c_str())) { in.close(); return false; }
+    }
+
+    String tmpPath = path + ".tmp";
+    String bakPath = path + ".bak";
+    SD.remove(tmpPath.c_str());
+    File out = SD.open(tmpPath.c_str(), FILE_WRITE);
+    if (!out) { in.close(); return false; }
+
+    uint8_t buf[RNS_COPY_CHUNK];
+    bool ok = true;
+    while (in.available()) {
+        size_t n = in.read(buf, sizeof(buf));
+        if (n == 0) break;
+        if (out.write(buf, n) != n) { ok = false; break; }
+        RNS::Utilities::OS::reset_watchdog();
+    }
+    in.close();
+    out.close();
+
+    if (!ok) { SD.remove(tmpPath.c_str()); return false; }
+    if (SD.exists(sdPath)) {
+        SD.remove(bakPath.c_str());
+        SD.rename(sdPath, bakPath.c_str());
+    }
+    SD.remove(sdPath);
+    if (!SD.rename(tmpPath.c_str(), sdPath)) {
+        if (SD.exists(bakPath.c_str())) SD.rename(bakPath.c_str(), sdPath);
+        SD.remove(tmpPath.c_str());
+        return false;
+    }
+    SD.remove(bakPath.c_str());
+    return true;
+}
+
 class LittleFSStreamImpl : public RNS::FileStreamImpl {
 public:
     LittleFSStreamImpl(File&& f) : _f(std::move(f)) {}
@@ -110,18 +184,23 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
     RNS::Utilities::OS::register_filesystem(fs);
     Serial.println("[RNS] Filesystem registered");
 
-    // Restore routing tables and known destinations from SD if missing on flash
+    // Endpoint mode learns paths live from announces/path requests. Upstream
+    // Reticulum only restores destination_table in transport mode, so do not
+    // resurrect stale endpoint path caches from SD or flash.
+    if (LittleFS.exists("/destination_table")) LittleFS.remove("/destination_table");
+    if (LittleFS.exists("/packet_hashlist")) LittleFS.remove("/packet_hashlist");
+
+    // Restore known destination identities from SD if missing on flash.
     if (_sd && _sd->isReady()) {
-        static const char* files[] = {"/destination_table", "/packet_hashlist", "/known_destinations"};
+        static const char* files[] = {"/known_destinations"};
         for (const char* name : files) {
             if (!LittleFS.exists(name)) {
                 char sdPath[64];
                 snprintf(sdPath, sizeof(sdPath), "/ratdeck/transport%s", name);
-                uint8_t buf[4096];
-                size_t len = 0;
-                if (_sd->readFile(sdPath, buf, sizeof(buf), len) && len > 0) {
-                    File f = LittleFS.open(name, "w");
-                    if (f) { f.write(buf, len); f.close(); }
+                if (copySDToFlash(sdPath, name)) {
+                    File restored = LittleFS.open(name, "r");
+                    size_t len = restored ? restored.size() : 0;
+                    if (restored) restored.close();
                     Serial.printf("[RNS] Restored %s from SD (%d bytes)\n", name, (int)len);
                 }
             }
@@ -158,31 +237,11 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
         static unsigned int count = 0;
         if (now - windowStart >= 1000) { windowStart = now; count = 0; }
 
+        if (packet.context() == RNS::Type::Packet::PATH_RESPONSE) return true;
+
         // Adaptive rate: tighter during first 60s boot flood, then normal
         unsigned int maxRate = (now < 60000) ? 3 : RATDECK_MAX_ANNOUNCES_PER_SEC;
         if (++count > maxRate) { ReticulumManager::_announceFilterCount++; return false; }
-
-        // Skip re-validation of known paths (saves ~100ms Ed25519 per announce)
-        // Allow through if better path discovered, or once per 5 min for name/ratchet updates.
-        // Uses raw hash bytes as key (avoids expensive toHex per packet).
-        if (RNS::Transport::has_path(packet.destination_hash())) {
-            // Always allow announces with a better (shorter) path through
-            uint8_t existingHops = RNS::Transport::hops_to(packet.destination_hash());
-            if (packet.hops() < existingHops) return true;
-
-            static std::unordered_map<std::string, unsigned long> lastRevalidate;
-            std::string key((const char*)packet.destination_hash().data(),
-                            packet.destination_hash().size());
-
-            auto it = lastRevalidate.find(key);
-            if (it != lastRevalidate.end() && (now - it->second) < 300000) {
-                ReticulumManager::_announceFilterCount++;
-                return false;
-            }
-            lastRevalidate[key] = now;
-
-            if (lastRevalidate.size() > 300) lastRevalidate.clear();
-        }
 
         return true;
     });
@@ -225,22 +284,11 @@ bool ReticulumManager::loadOrCreateIdentity() {
         }
     }
 
-    // Tier 2: SD card
     if (_sd && _sd->isReady() && _sd->exists(SD_PATH_IDENTITY)) {
-        uint8_t keyBuf[128];
-        size_t keyLen = 0;
-        if (_sd->readFile(SD_PATH_IDENTITY, keyBuf, sizeof(keyBuf), keyLen) && keyLen > 0) {
-            RNS::Bytes keyData(keyBuf, keyLen);
-            _identity = RNS::Identity(false);
-            if (_identity.load_private_key(keyData)) {
-                Serial.printf("[RNS] Identity restored from SD: %s\n", _identity.hexhash().c_str());
-                saveIdentityToAll(keyData);
-                return true;
-            }
-        }
+        Serial.println("[RNS] SD identity backup present; automatic import disabled");
     }
 
-    // Tier 3: NVS (ESP32 Preferences — always available)
+    // Tier 2: NVS (ESP32 Preferences — always available)
     {
         Preferences prefs;
         if (prefs.begin("ratdeck_id", true)) {
@@ -276,11 +324,6 @@ bool ReticulumManager::loadOrCreateIdentity() {
 void ReticulumManager::saveIdentityToAll(const RNS::Bytes& keyData) {
     // Flash
     _flash->writeAtomic(PATH_IDENTITY, keyData.data(), keyData.size());
-    // SD
-    if (_sd && _sd->isReady()) {
-        _sd->ensureDir("/ratdeck/identity");
-        _sd->writeAtomic(SD_PATH_IDENTITY, keyData.data(), keyData.size());
-    }
     // NVS (always available, survives flash/SD failures)
     Preferences prefs;
     if (prefs.begin("ratdeck_id", false)) {
@@ -293,7 +336,6 @@ void ReticulumManager::saveIdentityToAll(const RNS::Bytes& keyData) {
 void ReticulumManager::loop() {
     if (!_transportActive) return;
     _reticulum.loop();
-    if (_loraImpl) { _loraImpl->loop(); }
     unsigned long now = millis();
     if (now - _lastPersist >= PATH_PERSIST_INTERVAL_MS) {
         _lastPersist = now;
@@ -303,34 +345,27 @@ void ReticulumManager::loop() {
 
 // Synchronous persist — one cycle per call to spread I/O across intervals.
 // Runs on core 1 (main loop) to avoid data races with microReticulum's
-// single-threaded transport state.
+// single-threaded transport state. Ratdeck is an endpoint, not a transport
+// node, so path tables are intentionally not persisted across boots.
 void ReticulumManager::persistData() {
     unsigned long start = millis();
     switch (_persistCycle) {
         case 0:
-            RNS::Transport::persist_data();
-            break;
-        case 1:
             RNS::Identity::persist_data();
             break;
-        case 2:
+        case 1:
             if (_sd && _sd->isReady()) {
-                static const char* files[] = {"/destination_table", "/packet_hashlist", "/known_destinations"};
+                static const char* files[] = {"/known_destinations"};
                 for (const char* name : files) {
                     File f = LittleFS.open(name, "r");
                     if (f && f.size() > 0) {
-                        size_t sz = f.size();
-                        uint8_t* buf = (uint8_t*)malloc(sz);
-                        if (buf) {
-                            f.readBytes((char*)buf, sz);
-                            char sdPath[64];
-                            snprintf(sdPath, sizeof(sdPath), "/ratdeck/transport%s", name);
-                            _sd->ensureDir("/ratdeck/transport");
-                            _sd->writeSimple(sdPath, buf, sz);
-                            free(buf);
-                        }
+                        f.close();
+                        char sdPath[64];
+                        snprintf(sdPath, sizeof(sdPath), "/ratdeck/transport%s", name);
+                        copyFlashToSD(_sd, name, sdPath);
+                    } else {
+                        if (f) f.close();
                     }
-                    if (f) f.close();
                 }
             }
             break;
@@ -340,7 +375,7 @@ void ReticulumManager::persistData() {
     if (dur > 500) {
         Serial.printf("[PERSIST] WARNING: Cycle %d blocked for %lums!\n", _persistCycle, dur);
     }
-    _persistCycle = (_persistCycle + 1) % 3;
+    _persistCycle = (_persistCycle + 1) % 2;
 }
 
 String ReticulumManager::identityHash() const {

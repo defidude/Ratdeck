@@ -1,6 +1,8 @@
 #include "TCPClientInterface.h"
 #include "config/Config.h"
 
+#include <WiFi.h>
+
 TCPClientInterface::TCPClientInterface(const char* host, uint16_t port, const char* name)
     : RNS::InterfaceImpl(name), _host(host), _port(port)
 {
@@ -18,6 +20,12 @@ TCPClientInterface::TCPClientInterface(const char* host, uint16_t port, const ch
 
 TCPClientInterface::~TCPClientInterface() {
     stop();
+    if (_connectState == CS_CONNECTING) {
+        Serial.printf("[TCP] Waiting for connect task before destroy: %s:%d\n",
+                      _host.c_str(), _port);
+        waitForConnectTask();
+    }
+    if (_client.connected()) _client.stop();
     if (_rxBuffer) { free(_rxBuffer); _rxBuffer = nullptr; }
     if (_txBuffer) { free(_txBuffer); _txBuffer = nullptr; }
     if (_wrapBuffer) { free(_wrapBuffer); _wrapBuffer = nullptr; }
@@ -31,37 +39,79 @@ bool TCPClientInterface::start() {
 
 void TCPClientInterface::stop() {
     _online = false;
+    if (_connectState == CS_CONNECTING) {
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.printf("[TCP] Stop deferred while connect task exits for %s:%d\n",
+                          _host.c_str(), _port);
+            return;
+        }
+        waitForConnectTask();
+    } else {
+        _connectTask = nullptr;
+    }
     if (_client.connected()) {
         _client.stop();
         Serial.printf("[TCP] Disconnected from %s:%d\n", _host.c_str(), _port);
     }
 }
 
+void TCPClientInterface::waitForConnectTask() {
+    while (_connectState == CS_CONNECTING) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    _connectTask = nullptr;
+}
+
+void TCPClientInterface::connectTaskFn(void* arg) {
+    auto* self = static_cast<TCPClientInterface*>(arg);
+    bool ok = self->_client.connect(self->_host.c_str(), self->_port, TCP_CONNECT_TIMEOUT_MS);
+    if (ok && !self->_online) {
+        self->_client.stop();
+        ok = false;
+    }
+    self->_connectState = ok ? CS_CONNECTED : CS_FAILED;
+    vTaskDelete(nullptr);
+}
+
 void TCPClientInterface::tryConnect() {
+    if (_connectState == CS_CONNECTING) return;
     _lastAttempt = millis();
-    Serial.printf("[TCP] Connecting to %s:%d...\n", _host.c_str(), _port);
-
-    if (_client.connect(_host.c_str(), _port, TCP_CONNECT_TIMEOUT_MS)) {
-        // Reset HDLC frame state and hub discovery for new connection
-        _inFrame = false;
-        _escaped = false;
-        _rxPos = 0;
-        _hubTransportIdKnown = false;
-        _pendingAnnounces.clear();
-        _lastRxTime = millis();
-
-        // Set TCP write timeout to prevent blocking on half-open sockets
-        _client.setTimeout(5);  // 5 second write timeout
-        _client.setNoDelay(true);  // Disable Nagle — send immediately
-
-        Serial.printf("[TCP] Connected to %s:%d\n", _host.c_str(), _port);
-    } else {
-        Serial.printf("[TCP] Failed to connect to %s:%d\n", _host.c_str(), _port);
+    _connectState = CS_CONNECTING;
+    Serial.printf("[TCP] Connecting to %s:%d (async)...\n", _host.c_str(), _port);
+    BaseType_t ok = xTaskCreate(connectTaskFn, "tcpconn", 4096, this, 1, &_connectTask);
+    if (ok != pdPASS) {
+        _connectState = CS_IDLE;
+        _connectTask = nullptr;
+        Serial.printf("[TCP] Failed to spawn connect task for %s:%d\n", _host.c_str(), _port);
     }
 }
 
 void TCPClientInterface::loop() {
     if (!_online) return;
+
+    if (_connectState == CS_CONNECTED) {
+        _connectState = CS_IDLE;
+        _connectTask = nullptr;
+        // Reset HDLC frame state and hub discovery for new connection
+        _inFrame = false;
+        _escaped = false;
+        _rxPos = 0;
+        _hubTransportIdKnown = false;
+        _lastRxTime = millis();
+
+        // Set TCP write timeout to prevent blocking on half-open sockets
+        _client.setTimeout(5);  // 5 ms write/read timeout
+        _client.setNoDelay(true);  // Disable Nagle — send immediately
+
+        Serial.printf("[TCP] Connected to %s:%d\n", _host.c_str(), _port);
+    } else if (_connectState == CS_FAILED) {
+        _connectState = CS_IDLE;
+        _connectTask = nullptr;
+        Serial.printf("[TCP] Failed to connect to %s:%d\n", _host.c_str(), _port);
+    }
+
+    // WiFiClient is not safe to use from the loop while connectTaskFn owns it.
+    if (_connectState == CS_CONNECTING) return;
 
     // Auto-reconnect (only if WiFi is connected)
     if (!_client.connected()) {
@@ -102,15 +152,6 @@ void TCPClientInterface::loop() {
                     char hex[33];
                     for (int j = 0; j < 16; j++) sprintf(hex + j*2, "%02x", _hubTransportId[j]);
                     Serial.printf("[TCP] Learned hub transport_id: %.8s\n", hex);
-
-                    // Flush any announces that were queued before hub ID was known
-                    for (auto& pending : _pendingAnnounces) {
-                        sendFrame(pending.data(), pending.size());
-                        InterfaceImpl::handle_outgoing(pending);
-                        Serial.printf("[TCP] TX %d bytes (flushed pending announce) to %s:%d\n",
-                                      (int)pending.size(), _host.c_str(), _port);
-                    }
-                    _pendingAnnounces.clear();
                 }
             }
 
@@ -129,29 +170,38 @@ void TCPClientInterface::send_outgoing(const RNS::Bytes& data) {
         Serial.printf("[TCP] TX BLOCKED (offline) %d bytes to %s:%d\n", (int)data.size(), _host.c_str(), _port);
         return;
     }
+    if (_connectState == CS_CONNECTING) {
+        Serial.printf("[TCP] TX BLOCKED (connecting) %d bytes to %s:%d\n", (int)data.size(), _host.c_str(), _port);
+        return;
+    }
     if (!_client.connected()) {
         Serial.printf("[TCP] TX BLOCKED (disconnected) %d bytes to %s:%d\n", (int)data.size(), _host.c_str(), _port);
         return;
     }
 
     // Wrap Header1 non-announce packets as Header2 for TCP transport
-    // (mirrors Rust actor.rs:653-678 — hub drops raw Header1 data packets)
+    // (mirrors Rust actor.rs:653-678 — hub drops raw Header1 data packets).
+    // Link packets are the exception: LRPROOF/LRRTT/link DATA are addressed
+    // by link_id and must stay Header1 so the hub's link_table can route them
+    // back along the link request path.
     if (_hubTransportIdKnown && data.size() >= 19) {
         uint8_t flags = data.data()[0];
         uint8_t header_type = (flags >> 6) & 0x01;
+        uint8_t destination_type = (flags >> 2) & 0x03;
         uint8_t packet_type = flags & 0x03;
+        bool link_packet = destination_type == 0x03;
 
         // Diagnostic: identify packet types going through TCP
         static const char* pt_names[] = {"DATA", "ANNOUNCE", "LINKREQ", "PROOF"};
-        Serial.printf("[TCP-DIAG] send: %d bytes ht=%d pt=%s(%d) to %s:%d\n",
-            (int)data.size(), header_type,
+        Serial.printf("[TCP-DIAG] send: %d bytes ht=%d dt=%d pt=%s(%d) to %s:%d\n",
+            (int)data.size(), header_type, destination_type,
             (packet_type < 4) ? pt_names[packet_type] : "?", packet_type,
             _host.c_str(), _port);
         if (packet_type == 0x03) {
             Serial.printf("[TCP-DIAG] *** PROOF packet being sent via TCP! ***\n");
         }
 
-        if (packet_type != 0x01 && packet_type != 0x03) {  // Not ANNOUNCE, not PROOF
+        if (packet_type != 0x01 && !link_packet) {  // Not ANNOUNCE or LINK traffic
             if (header_type == 0) {
                 // Header1 → wrap as Header2 (handles hops==1, hops==0, unknown path)
                 uint8_t new_flags = flags | 0x50;  // Set Header2 (bit 6) + Transport (bit 4)
@@ -191,18 +241,10 @@ void TCPClientInterface::send_outgoing(const RNS::Bytes& data) {
         }
     }
 
-    // Queue announces until hub transport_id is learned
     if (!_hubTransportIdKnown) {
-        uint8_t flags = data.size() >= 1 ? data.data()[0] : 0;
-        uint8_t packet_type = flags & 0x03;
-        if (packet_type == 0x01 && _pendingAnnounces.size() < 3) {
-            _pendingAnnounces.push_back(data);
-            Serial.printf("[TCP] TX %d bytes (queued announce, hub ID pending) to %s:%d\n",
-                          (int)data.size(), _host.c_str(), _port);
-            return;
-        }
         sendFrame(data.data(), data.size());
-        Serial.printf("[TCP] TX %d bytes (no hub ID yet) to %s:%d\n", (int)data.size(), _host.c_str(), _port);
+        Serial.printf("[TCP] TX %d bytes (hub ID pending) to %s:%d\n",
+                      (int)data.size(), _host.c_str(), _port);
     } else {
         // Passthrough: announces, correct Header2
         sendFrame(data.data(), data.size());

@@ -11,7 +11,5 @@ public:
 
 private:
     lv_obj_t* _lblTitle = nullptr;
-    lv_obj_t* _lblVersion = nullptr;
     lv_obj_t* _bar = nullptr;
-    lv_obj_t* _lblStatus = nullptr;
 };

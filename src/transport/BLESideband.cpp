@@ -1,6 +1,12 @@
+#include <Arduino.h>
+#include "config/Config.h"
+
+#if HAS_BLE
+
 #include "BLESideband.h"
 
 bool BLESideband::begin(NimBLEServer* existingServer) {
+    if (!_packetsMutex) _packetsMutex = xSemaphoreCreateMutex();
     if (existingServer) {
         _pServer = existingServer;
         _ownServer = false;
@@ -76,7 +82,10 @@ void BLESideband::processRxByte(uint8_t b) {
             // First byte is KISS command; 0x00 = data frame
             if (_rxFrame[0] == KISS_CMD_DATA && _rxFrame.size() > 1) {
                 std::vector<uint8_t> pkt(_rxFrame.begin() + 1, _rxFrame.end());
-                _incomingPackets.push_back(std::move(pkt));
+                if (_packetsMutex && xSemaphoreTake(_packetsMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+                    if (_incomingPackets.size() < 12) _incomingPackets.push_back(std::move(pkt));
+                    xSemaphoreGive(_packetsMutex);
+                }
             }
             _rxFrame.clear();
         }
@@ -104,10 +113,12 @@ void BLESideband::processRxByte(uint8_t b) {
 }
 
 void BLESideband::loop() {
-    while (!_incomingPackets.empty()) {
-        auto pkt = std::move(_incomingPackets.front());
-        _incomingPackets.erase(_incomingPackets.begin());
-
+    std::vector<std::vector<uint8_t>> localPackets;
+    if (_packetsMutex && xSemaphoreTake(_packetsMutex, pdMS_TO_TICKS(2)) == pdTRUE) {
+        localPackets.swap(_incomingPackets);
+        xSemaphoreGive(_packetsMutex);
+    }
+    for (auto& pkt : localPackets) {
         if (_packetCb && !pkt.empty()) {
             _packetCb(pkt.data(), pkt.size());
         }
@@ -146,3 +157,5 @@ void BLESideband::sendPacket(const uint8_t* data, size_t len) {
         _pTxChar->notify(frame.data() + offset, chunk);
     }
 }
+
+#endif

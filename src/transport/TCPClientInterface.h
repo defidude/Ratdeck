@@ -3,7 +3,8 @@
 #include <Interface.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
-#include <vector>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 class TCPClientInterface : public RNS::InterfaceImpl {
 public:
@@ -18,7 +19,11 @@ public:
         return "TCPClient[" + _name + "]";
     }
 
-    bool isConnected() { return _client.connected(); }
+    bool isConnected() {
+        if (_connectState == CS_CONNECTING) return false;
+        return _client.connected();
+    }
+    bool canDestroy() const { return _connectState != CS_CONNECTING; }
     const String& host() const { return _host; }
     uint16_t port() const { return _port; }
 
@@ -29,6 +34,19 @@ private:
     void tryConnect();
     void sendFrame(const uint8_t* data, size_t len);
     int readFrame();
+    static void connectTaskFn(void* arg);
+    void waitForConnectTask();
+
+    // WiFiClient::connect() blocks. Run it in a one-shot task and let the
+    // main loop claim the result before touching _client again.
+    enum ConnectState : uint8_t {
+        CS_IDLE       = 0,
+        CS_CONNECTING = 1,
+        CS_CONNECTED  = 2,
+        CS_FAILED     = 3,
+    };
+    volatile ConnectState _connectState = CS_IDLE;
+    TaskHandle_t _connectTask = nullptr;
 
     WiFiClient _client;
     String _host;
@@ -48,9 +66,6 @@ private:
     // Telemetry counters
     unsigned long _hubRxCount = 0;
     unsigned long _txDropCount = 0;
-
-    // Pending announces: buffered until hub transport_id is learned
-    std::vector<RNS::Bytes> _pendingAnnounces;
 
     // Persistent HDLC frame reassembly state (survives across loop() calls)
     bool _inFrame = false;

@@ -80,8 +80,11 @@ void Power::setBrightness(uint8_t percent) {
 }
 
 void Power::setKbBrightness(uint8_t percent, bool apply) {
-    keyboard.setBacklightBrightness(constrain(percent, 1, 100));
-    if (apply) { // Show the new brightness
+    percent = constrain(percent, 0, 100);
+    keyboard.setBacklightBrightness(percent);
+    if (percent == 0) {
+        keyboard.backlightOff();
+    } else if (apply) { // Show the new brightness
         keyboard.backlightOn();
     }
 }

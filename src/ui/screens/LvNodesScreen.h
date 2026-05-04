@@ -24,7 +24,7 @@ public:
     void setUserConfig(UserConfig* cfg) { _cfg = cfg; }
     bool handleLongPress() override;
 
-    const char* title() const override { return "Nodes"; }
+    const char* title() const override { return "Peers"; }
 
 private:
     void rebuildList();
@@ -37,6 +37,7 @@ private:
     void showNicknameInput();
     void updateMenuSelection();
     void updateNicknameDisplay();
+    void updateOverlayDetails(const char* title);
 
     AnnounceManager* _am = nullptr;
     class UIManager* _ui = nullptr;
@@ -53,6 +54,9 @@ private:
 
     // Overlay widgets
     lv_obj_t* _overlay = nullptr;
+    lv_obj_t* _overlayTitle = nullptr;
+    lv_obj_t* _overlayMeta = nullptr;
+    lv_obj_t* _overlayReach = nullptr;
     lv_obj_t* _menuLabels[3] = {};
     lv_obj_t* _menuBtns[3] = {};
     lv_obj_t* _nicknameBox = nullptr;
@@ -69,5 +73,5 @@ private:
     static constexpr unsigned long REBUILD_INTERVAL_MS = 5000;
 
     lv_obj_t* _list = nullptr;
-    lv_obj_t* _lblEmpty = nullptr;
+    lv_obj_t* _emptyState = nullptr;
 };

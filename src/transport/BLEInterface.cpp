@@ -1,3 +1,8 @@
+#include <Arduino.h>
+#include "config/Config.h"
+
+#if HAS_BLE
+
 #include "BLEInterface.h"
 #include "BLESideband.h"
 
@@ -92,7 +97,9 @@ void BLEInterface::processRxByte(uint8_t b) {
         if (_rxActive && !_rxFrame.empty()) {
             // Complete frame received — queue it (mutex: called from NimBLE task)
             if (_framesMutex && xSemaphoreTake(_framesMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-                _incomingFrames.push_back(std::move(_rxFrame));
+                if (_incomingFrames.size() < MAX_INCOMING_FRAMES) {
+                    _incomingFrames.push_back(std::move(_rxFrame));
+                }
                 xSemaphoreGive(_framesMutex);
             }
             _rxFrame.clear();
@@ -180,3 +187,5 @@ void BLEInterface::sendFrame(const uint8_t* data, size_t len) {
         _pTxChar->notify(frame.data() + offset, chunk);
     }
 }
+
+#endif

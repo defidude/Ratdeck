@@ -66,6 +66,7 @@ void WiFiInterface::stop() {
         client.stop();
     }
     _clients.clear();
+    _clientFrames.clear();
     _server.stop();
     WiFi.softAPdisconnect(true);
 }
@@ -85,7 +86,10 @@ void WiFiInterface::acceptClients() {
             Serial.printf("[WIFI] Client rejected (max %d reached)\n", MAX_AP_CLIENTS);
             return;
         }
+        newClient.setNoDelay(true);
+        newClient.setTimeout(5);
         _clients.push_back(newClient);
+        _clientFrames.push_back(FrameState{});
         Serial.printf("[WIFI] Client connected (%d total)\n", (int)_clients.size());
     }
 }
@@ -95,11 +99,13 @@ void WiFiInterface::readClients() {
         if (!_clients[i].connected()) {
             _clients[i].stop();
             _clients.erase(_clients.begin() + i);
+            if (i < (int)_clientFrames.size()) _clientFrames.erase(_clientFrames.begin() + i);
             Serial.printf("[WIFI] Client disconnected (%d total)\n", (int)_clients.size());
             continue;
         }
 
-        int len = readFrame(_clients[i], _rxBuffer, sizeof(_rxBuffer));
+        if (i >= (int)_clientFrames.size()) _clientFrames.resize(_clients.size());
+        int len = readFrame(_clients[i], _clientFrames[i], _rxBuffer, sizeof(_rxBuffer));
         if (len > 0) {
             RNS::Bytes data(_rxBuffer, len);
             Serial.printf("[WIFI] RX %d bytes from client\n", len);
@@ -201,6 +207,12 @@ std::vector<WiFiInterface::ScanResult> WiFiInterface::scanNetworks(int maxResult
 }
 
 void WiFiInterface::startAsyncScan() {
+    wifi_mode_t mode = WiFi.getMode();
+    if (mode == WIFI_OFF) {
+        WiFi.mode(WIFI_STA);
+    } else if (mode == WIFI_AP) {
+        WiFi.mode(WIFI_AP_STA);
+    }
     WiFi.scanDelete();
     WiFi.scanNetworks(true, false, false, 300, 0);  // async=true
     Serial.println("[WIFI] Async scan started");
@@ -255,49 +267,46 @@ void WiFiInterface::sendFrame(WiFiClient& client, const uint8_t* data, size_t le
     }
     _txBuffer[pos++] = FRAME_START;
     client.write(_txBuffer, pos);
-    client.flush();
 }
 
-int WiFiInterface::readFrame(WiFiClient& client, uint8_t* buffer, size_t maxLen) {
+int WiFiInterface::readFrame(WiFiClient& client, FrameState& state, uint8_t* buffer, size_t maxLen) {
     if (!client.available()) return 0;
 
-    bool inFrame = false;
-    bool escaped = false;
-    size_t pos = 0;
-
-    // Tight drain loop: wait up to 10ms for complete frame (AP clients are on LAN)
-    unsigned long deadline = millis() + 10;
-    while (pos < maxLen) {
-        if (!client.available()) {
-            if (millis() >= deadline) break;
-            delay(1);
-            continue;
-        }
-
+    while (client.available() && state.pos < maxLen) {
         uint8_t b = client.read();
 
         if (b == FRAME_START) {
-            if (inFrame && pos > 0) {
-                return pos;  // End of frame
+            if (state.inFrame && state.pos > 0) {
+                int len = state.pos;
+                state.pos = 0;
+                state.escaped = false;
+                return len;  // End of frame
             }
-            inFrame = true;
-            pos = 0;
+            state.inFrame = true;
+            state.escaped = false;
+            state.pos = 0;
             continue;
         }
 
-        if (!inFrame) continue;
+        if (!state.inFrame) continue;
 
         if (b == FRAME_ESC) {
-            escaped = true;
+            state.escaped = true;
             continue;
         }
 
-        if (escaped) {
-            buffer[pos++] = b ^ FRAME_XOR;
-            escaped = false;
+        if (state.escaped) {
+            buffer[state.pos++] = b ^ FRAME_XOR;
+            state.escaped = false;
         } else {
-            buffer[pos++] = b;
+            buffer[state.pos++] = b;
         }
+    }
+
+    if (state.pos >= maxLen) {
+        state.inFrame = false;
+        state.escaped = false;
+        state.pos = 0;
     }
 
     return 0;  // Incomplete frame

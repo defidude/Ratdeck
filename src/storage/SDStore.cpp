@@ -38,9 +38,15 @@ bool SDStore::begin(SPIClass* spi, int csPin) {
     SD.end();
     if (!SD.begin(csPin, *spi, 16000000)) {
         // 16MHz failed, fall back to 4MHz
-        SD.begin(csPin, *spi, 4000000);
+        if (!SD.begin(csPin, *spi, 4000000)) {
+            Serial.println("[SD] 16MHz failed and 4MHz fallback failed");
+            _ready = false;
+            return false;
+        }
+        _ready = true;
         Serial.println("[SD] 16MHz failed, using 4MHz");
     } else {
+        _ready = true;
         Serial.println("[SD] SPI speed: 16MHz");
     }
 
@@ -128,6 +134,7 @@ bool SDStore::writeAtomic(const char* path, const uint8_t* data, size_t len) {
         if (SD.exists(bakPath.c_str())) { SD.rename(bakPath.c_str(), path); }
         return false;
     }
+    SD.remove(bakPath.c_str());
     return true;
 }
 
@@ -201,8 +208,8 @@ void SDStore::wipeDir(const char* path) {
 
 bool SDStore::hasExistingData() {
     if (!_ready) return false;
-    if (SD.exists("/ratdeck/config.json")) return true;
-    if (SD.exists("/ratdeck/identity/identity")) return true;
+    if (SD.exists(SD_PATH_USER_CONFIG)) return true;
+    if (SD.exists(SD_PATH_IDENTITY)) return true;
     File dir = SD.open("/ratdeck/messages");
     if (dir && dir.isDirectory()) {
         File entry = dir.openNextFile();

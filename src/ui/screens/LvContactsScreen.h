@@ -34,7 +34,8 @@ private:
     int _deleteIdx = -1;
     int _lastContactCount = -1;
     std::vector<int> _contactIndices;
+    std::vector<std::vector<uint8_t>> _avatarBuffers;
 
     lv_obj_t* _list = nullptr;
-    lv_obj_t* _lblEmpty = nullptr;
+    lv_obj_t* _emptyState = nullptr;
 };

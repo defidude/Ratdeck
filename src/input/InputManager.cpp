@@ -7,6 +7,22 @@ void InputManager::begin(Keyboard* kb, Trackball* tb, TouchInput* touch) {
     _touch = touch;
 }
 
+void InputManager::setTrackballSpeed(uint8_t speed) {
+    if (speed < 1) speed = 1;
+    if (speed > 5) speed = 5;
+    _trackballSpeed = speed;
+}
+
+int8_t InputManager::trackballThreshold() const {
+    static const int8_t thresholds[] = {5, 4, 3, 2, 1};
+    return thresholds[_trackballSpeed - 1];
+}
+
+unsigned long InputManager::trackballRateMs() const {
+    static const unsigned long rates[] = {260, 220, 180, 140, 100};
+    return rates[_trackballSpeed - 1];
+}
+
 void InputManager::update() {
     _hasKey = false;
     _activity = false;
@@ -46,12 +62,13 @@ void InputManager::update() {
             if (_tbAccumY > 20) _tbAccumY = 20;
             if (_tbAccumY < -20) _tbAccumY = -20;
 
-            if (now - _lastTbNavTime >= TB_NAV_RATE_MS) {
+            if (now - _lastTbNavTime >= trackballRateMs()) {
                 int8_t absX = _tbAccumX < 0 ? -_tbAccumX : _tbAccumX;
                 int8_t absY = _tbAccumY < 0 ? -_tbAccumY : _tbAccumY;
                 bool yDominant = absY >= absX;
+                int8_t threshold = trackballThreshold();
 
-                if (yDominant && absY >= TB_NAV_THRESHOLD) {
+                if (yDominant && absY >= threshold) {
                     _keyEvent = {};
                     if (_tbAccumY < 0) _keyEvent.up = true;
                     else               _keyEvent.down = true;
@@ -62,7 +79,7 @@ void InputManager::update() {
                     _tbAccumX = 0;
                     _tbAccumY = 0;
                 }
-                else if (!yDominant && absX >= TB_NAV_THRESHOLD) {
+                else if (!yDominant && absX >= threshold) {
                     _keyEvent = {};
                     if (_tbAccumX < 0) _keyEvent.left = true;
                     else               _keyEvent.right = true;

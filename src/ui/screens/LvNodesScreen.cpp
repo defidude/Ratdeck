@@ -7,46 +7,161 @@
 #include "config/UserConfig.h"
 #include <Arduino.h>
 #include <algorithm>
+#include <climits>
 #include "fonts/fonts.h"
+
+namespace {
+
+constexpr int kPeerRowH = 36;
+constexpr int kPeerHeaderH = 20;
+unsigned long nodeAgeMs(const DiscoveredNode& node, unsigned long now) {
+    if (node.lastSeen == 0 || now < node.lastSeen) return ULONG_MAX;
+    return now - node.lastSeen;
+}
+
+std::string displayNameFor(const DiscoveredNode& node) {
+    if (!node.name.empty()) return node.name;
+    std::string hex = node.hash.toHex();
+    return hex.substr(0, 12);
+}
+
+std::string identityLineFor(const DiscoveredNode& node) {
+    std::string hex = node.hash.toHex();
+    return "ID: " + hex;
+}
+
+std::string compactAge(unsigned long ageMs) {
+    if (ageMs == ULONG_MAX) return "old";
+    if (ageMs < 5000) return "now";
+
+    unsigned long sec = ageMs / 1000;
+    char buf[12];
+    if (sec < 60) {
+        snprintf(buf, sizeof(buf), "%lus", sec);
+    } else if (sec < 3600) {
+        snprintf(buf, sizeof(buf), "%lum", sec / 60);
+    } else if (sec < 86400) {
+        snprintf(buf, sizeof(buf), "%luh", sec / 3600);
+    } else {
+        snprintf(buf, sizeof(buf), "%lud", sec / 86400);
+    }
+    return buf;
+}
+
+std::string hopTextFor(const DiscoveredNode& node) {
+    if (node.hops > 0 && node.hops < 128) {
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%uhop", (unsigned)node.hops);
+        return buf;
+    }
+    return "";
+}
+
+std::string peerMetaFor(const DiscoveredNode& node, unsigned long ageMs, bool devMode) {
+    std::string meta = hopTextFor(node);
+    if (!meta.empty()) meta += " ";
+    meta += compactAge(ageMs);
+    if (devMode && node.rssi != 0) {
+        char buf[14];
+        snprintf(buf, sizeof(buf), " %ddB", node.rssi);
+        meta += buf;
+    }
+    return meta;
+}
+
+lv_obj_t* createEmptyState(lv_obj_t* parent) {
+    lv_obj_t* box = lv_obj_create(parent);
+    lv_obj_set_size(box, 252, 94);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_pad_all(box, 0, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(box);
+
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t* pip = lv_obj_create(box);
+        lv_obj_set_size(pip, 6, 6);
+        lv_obj_set_pos(pip, 104 + i * 13, 14);
+        lv_obj_set_style_radius(pip, 3, 0);
+        lv_obj_set_style_bg_color(pip, lv_color_hex(i == 0 ? Theme::TEXT_MUTED : Theme::BORDER), 0);
+        lv_obj_set_style_bg_opa(pip, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(pip, 0, 0);
+        lv_obj_set_style_pad_all(pip, 0, 0);
+        lv_obj_clear_flag(pip, LV_OBJ_FLAG_SCROLLABLE);
+    }
+
+    lv_obj_t* title = lv_label_create(box);
+    lv_obj_set_style_text_font(title, &lv_font_ratdeck_14, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(Theme::TEXT_SECONDARY), 0);
+    lv_label_set_text(title, "No peers heard");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 34);
+
+    lv_obj_t* hint = lv_label_create(box);
+    lv_obj_set_style_text_font(hint, &lv_font_ratdeck_10, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(Theme::TEXT_MUTED), 0);
+    lv_label_set_text(hint, "Listening for announces");
+    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 55);
+
+    return box;
+}
+
+}  // namespace
 
 void LvNodesScreen::createUI(lv_obj_t* parent) {
     _screen = parent;
     lv_obj_set_style_bg_color(parent, lv_color_hex(Theme::BG), 0);
     lv_obj_set_style_pad_all(parent, 0, 0);
 
-    _lblEmpty = lv_label_create(parent);
-    lv_obj_set_style_text_font(_lblEmpty, &lv_font_ratdeck_14, 0);
-    lv_obj_set_style_text_color(_lblEmpty, lv_color_hex(Theme::TEXT_MUTED), 0);
-    lv_label_set_text(_lblEmpty, "No nodes discovered");
-    lv_obj_center(_lblEmpty);
+    _emptyState = createEmptyState(parent);
 
     _list = lv_obj_create(parent);
     lv_obj_set_size(_list, lv_pct(100), lv_pct(100));
     lv_obj_add_style(_list, LvTheme::styleList(), 0);
     lv_obj_set_layout(_list, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_flag(_list, LV_OBJ_FLAG_HIDDEN);
 
     rebuildList();
 
     // --- Action modal overlay (on top layer, centered) ---
     _overlay = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(_overlay, 200, 110);
-    lv_obj_set_pos(_overlay, (Theme::SCREEN_W - 200) / 2, Theme::STATUS_BAR_H + (Theme::CONTENT_H - 110) / 2);
+    lv_obj_set_size(_overlay, 260, 158);
+    lv_obj_set_pos(_overlay, (Theme::SCREEN_W - 260) / 2, Theme::STATUS_BAR_H + (Theme::CONTENT_H - 158) / 2);
     lv_obj_add_style(_overlay, LvTheme::styleModal(), 0);
-    lv_obj_set_style_pad_row(_overlay, 4, 0);
-    lv_obj_set_layout(_overlay, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(_overlay, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(_overlay, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(_overlay, 0, 0);
     lv_obj_clear_flag(_overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
 
-    const char* menuText[] = {"Add Contact", "Message", "Back"};
+    _overlayTitle = lv_label_create(_overlay);
+    lv_obj_set_style_text_font(_overlayTitle, &lv_font_ratdeck_14, 0);
+    lv_obj_set_style_text_color(_overlayTitle, lv_color_hex(Theme::ACCENT), 0);
+    lv_label_set_long_mode(_overlayTitle, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(_overlayTitle, 236);
+    lv_obj_set_pos(_overlayTitle, 12, 9);
+
+    _overlayMeta = lv_label_create(_overlay);
+    lv_obj_set_style_text_font(_overlayMeta, &lv_font_ratdeck_10, 0);
+    lv_obj_set_style_text_color(_overlayMeta, lv_color_hex(Theme::TEXT_MUTED), 0);
+    lv_label_set_long_mode(_overlayMeta, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(_overlayMeta, 236);
+    lv_obj_set_pos(_overlayMeta, 12, 29);
+
+    _overlayReach = lv_label_create(_overlay);
+    lv_obj_set_style_text_font(_overlayReach, &lv_font_ratdeck_10, 0);
+    lv_obj_set_style_text_color(_overlayReach, lv_color_hex(Theme::TEXT_SECONDARY), 0);
+    lv_label_set_long_mode(_overlayReach, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(_overlayReach, 236);
+    lv_obj_set_pos(_overlayReach, 12, 43);
+
+    const char* menuText[] = {"Save Contact", "Message", "Close"};
     for (int i = 0; i < 3; i++) {
         lv_obj_t* btn = lv_obj_create(_overlay);
-        lv_obj_set_size(btn, 176, 28);
+        lv_obj_set_size(btn, 236, 24);
+        lv_obj_set_pos(btn, 12, 63 + i * 27);
         lv_obj_set_style_bg_color(btn, lv_color_hex(Theme::BG_SURFACE), 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(Theme::BORDER), 0);
+        lv_obj_set_style_border_width(btn, 1, 0);
         lv_obj_set_style_pad_all(btn, 0, 0);
         lv_obj_set_style_radius(btn, 4, 0);
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
@@ -72,38 +187,41 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
 
     // Nickname input widgets
     _nicknameBox = lv_obj_create(_overlay);
-    lv_obj_set_size(_nicknameBox, 176, LV_SIZE_CONTENT);
+    lv_obj_set_size(_nicknameBox, 236, 86);
+    lv_obj_set_pos(_nicknameBox, 12, 63);
     lv_obj_set_style_bg_opa(_nicknameBox, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(_nicknameBox, 0, 0);
     lv_obj_set_style_pad_all(_nicknameBox, 0, 0);
-    lv_obj_set_style_pad_row(_nicknameBox, 2, 0);
-    lv_obj_set_layout(_nicknameBox, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(_nicknameBox, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(_nicknameBox, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(_nicknameBox, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(_nicknameBox, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t* nickTitle = lv_label_create(_nicknameBox);
-    lv_obj_set_style_text_font(nickTitle, &lv_font_ratdeck_12, 0);
-    lv_obj_set_style_text_color(nickTitle, lv_color_hex(Theme::ACCENT), 0);
-    lv_label_set_text(nickTitle, "Enter nickname:");
+    lv_obj_set_style_text_font(nickTitle, &lv_font_ratdeck_10, 0);
+    lv_obj_set_style_text_color(nickTitle, lv_color_hex(Theme::TEXT_SECONDARY), 0);
+    lv_label_set_text(nickTitle, "Contact name");
+    lv_obj_set_pos(nickTitle, 0, 0);
 
     _nicknameLbl = lv_label_create(_nicknameBox);
     lv_obj_set_style_text_font(_nicknameLbl, &lv_font_ratdeck_14, 0);
     lv_obj_set_style_text_color(_nicknameLbl, lv_color_hex(Theme::PRIMARY), 0);
+    lv_label_set_long_mode(_nicknameLbl, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(_nicknameLbl, 232);
     lv_label_set_text(_nicknameLbl, "_");
+    lv_obj_set_pos(_nicknameLbl, 0, 22);
 
     _nicknameHint = lv_label_create(_nicknameBox);
     lv_obj_set_style_text_font(_nicknameHint, &lv_font_ratdeck_10, 0);
     lv_obj_set_style_text_color(_nicknameHint, lv_color_hex(Theme::TEXT_MUTED), 0);
-    lv_label_set_text(_nicknameHint, "Enter=Save  Esc=Cancel");
+    lv_label_set_text(_nicknameHint, "Enter saves / Esc keeps");
+    lv_obj_set_pos(_nicknameHint, 0, 52);
 }
 
 void LvNodesScreen::destroyUI() {
     if (_overlay) { lv_obj_del(_overlay); _overlay = nullptr; }
     for (int i = 0; i < 3; i++) { _menuBtns[i] = nullptr; _menuLabels[i] = nullptr; }
+    _overlayTitle = nullptr; _overlayMeta = nullptr; _overlayReach = nullptr;
     _nicknameBox = nullptr; _nicknameLbl = nullptr; _nicknameHint = nullptr;
-    _list = nullptr; _lblEmpty = nullptr;
+    _list = nullptr; _emptyState = nullptr;
     LvScreen::destroyUI();
 }
 
@@ -111,6 +229,8 @@ void LvNodesScreen::onEnter() {
     _lastNodeCount = -1;
     _lastContactCount = -1;
     _focusActive = false;
+    _confirmDelete = false;
+    hideOverlay();
     rebuildList();
 }
 
@@ -124,9 +244,7 @@ void LvNodesScreen::refreshUI() {
     int contactDelta = abs(contacts - _lastContactCount);
     if (countDelta > 0 || contactDelta > 0) {
         _lastRebuild = now;
-        if (countDelta > 3 || contactDelta > 0) {
-            rebuildList();
-        }
+        rebuildList();
     }
 }
 
@@ -141,6 +259,7 @@ void LvNodesScreen::rebuildList() {
     const auto& nodes = _am->nodes();
     int count = (int)nodes.size();
     _lastNodeCount = count;
+    unsigned long now = millis();
 
     for (int i = 0; i < count; i++) {
         if (nodes[i].saved) _sortedContactIndices.push_back(i);
@@ -148,41 +267,57 @@ void LvNodesScreen::rebuildList() {
     }
     _lastContactCount = (int)_sortedContactIndices.size();
 
+    std::sort(_sortedContactIndices.begin(), _sortedContactIndices.end(), [&nodes, now](int a, int b) {
+        unsigned long ageA = nodeAgeMs(nodes[a], now);
+        unsigned long ageB = nodeAgeMs(nodes[b], now);
+        if (ageA != ageB) return ageA < ageB;
+        std::string nameA = displayNameFor(nodes[a]);
+        std::string nameB = displayNameFor(nodes[b]);
+        if (nameA == nameB) return nodes[a].hash.toHex() < nodes[b].hash.toHex();
+        return nameA < nameB;
+    });
+
     std::sort(_sortedOnlineIndices.begin(), _sortedOnlineIndices.end(), [&nodes](int a, int b) {
         return nodes[a].lastSeen > nodes[b].lastSeen;
     });
 
     if (_sortedContactIndices.empty() && _sortedOnlineIndices.empty()) {
-        lv_obj_clear_flag(_lblEmpty, LV_OBJ_FLAG_HIDDEN);
+        if (_emptyState) lv_obj_clear_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(_list, LV_OBJ_FLAG_HIDDEN);
         return;
     }
 
-    lv_obj_add_flag(_lblEmpty, LV_OBJ_FLAG_HIDDEN);
+    if (_emptyState) lv_obj_add_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(_list, LV_OBJ_FLAG_HIDDEN);
 
     bool devMode = _cfg && _cfg->settings().devMode;
 
     auto addHeader = [&](const char* text) {
         lv_obj_t* hdr = lv_obj_create(_list);
-        lv_obj_set_size(hdr, Theme::CONTENT_W, 22);
+        lv_obj_set_size(hdr, Theme::CONTENT_W, kPeerHeaderH);
         lv_obj_add_style(hdr, LvTheme::styleSectionHeader(), 0);
         lv_obj_set_style_radius(hdr, 0, 0);
+        lv_obj_set_style_pad_all(hdr, 0, 0);
         lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
         lv_obj_t* lbl = lv_label_create(hdr);
         lv_obj_set_style_text_font(lbl, &lv_font_ratdeck_10, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(Theme::ACCENT), 0);
         lv_label_set_text(lbl, text);
-        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 4, 0);
+        lv_obj_set_pos(lbl, 8, 5);
     };
 
     auto addNodeRow = [&](int nodeIdx) {
         const auto& node = nodes[nodeIdx];
+        unsigned long age = nodeAgeMs(node, now);
 
         lv_obj_t* row = lv_obj_create(_list);
-        lv_obj_set_size(row, Theme::CONTENT_W, 26);
+        lv_obj_set_size(row, Theme::CONTENT_W, kPeerRowH);
         lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
         lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(Theme::BORDER), 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(row, (void*)(intptr_t)nodeIdx);
@@ -200,51 +335,47 @@ void LvNodesScreen::rebuildList() {
             lv_obj_scroll_to_view(lv_event_get_target(e), LV_ANIM_ON);
         }, LV_EVENT_FOCUSED, nullptr);
 
-        // Name + hash
-        std::string truncName = node.name.substr(0, devMode ? 12 : 15);
-        std::string displayHash = node.hash.toHex().substr(0, 12);
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s [%s]", truncName.c_str(), displayHash.c_str());
         lv_obj_t* nameLbl = lv_label_create(row);
         lv_obj_set_style_text_font(nameLbl, &lv_font_ratdeck_12, 0);
         lv_obj_set_style_text_color(nameLbl, lv_color_hex(
             node.saved ? Theme::ACCENT : Theme::PRIMARY), 0);
-        lv_label_set_text(nameLbl, buf);
-        lv_obj_align(nameLbl, LV_ALIGN_LEFT_MID, 8, 0);
+        lv_label_set_long_mode(nameLbl, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(nameLbl, Theme::CONTENT_W - 132);
+        std::string name = displayNameFor(node);
+        lv_label_set_text(nameLbl, name.c_str());
+        lv_obj_set_pos(nameLbl, 8, 3);
 
-        // Info (hops + age)
-        unsigned long ageSec = (millis() - node.lastSeen) / 1000;
-        char infoBuf[32];
-        if (node.hops > 0 && node.hops < 128) {
-            if (ageSec < 60) snprintf(infoBuf, sizeof(infoBuf), "%dhop %lus", node.hops, ageSec);
-            else snprintf(infoBuf, sizeof(infoBuf), "%dhop %lum", node.hops, ageSec / 60);
-        } else {
-            if (ageSec < 60) snprintf(infoBuf, sizeof(infoBuf), "%lus", ageSec);
-            else snprintf(infoBuf, sizeof(infoBuf), "%lum", ageSec / 60);
-        }
-        if (devMode && node.rssi != 0) {
-            char rssiBuf[16];
-            snprintf(rssiBuf, sizeof(rssiBuf), " %ddB", node.rssi);
-            strncat(infoBuf, rssiBuf, sizeof(infoBuf) - strlen(infoBuf) - 1);
-        }
         lv_obj_t* infoLbl = lv_label_create(row);
         lv_obj_set_style_text_font(infoLbl, &lv_font_ratdeck_10, 0);
         lv_obj_set_style_text_color(infoLbl, lv_color_hex(Theme::TEXT_SECONDARY), 0);
-        lv_label_set_text(infoLbl, infoBuf);
-        lv_obj_align(infoLbl, LV_ALIGN_RIGHT_MID, -4, 0);
+        lv_obj_set_style_text_align(infoLbl, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_label_set_long_mode(infoLbl, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(infoLbl, 116);
+        std::string meta = peerMetaFor(node, age, devMode);
+        lv_label_set_text(infoLbl, meta.c_str());
+        lv_obj_set_pos(infoLbl, Theme::CONTENT_W - 124, 5);
+
+        lv_obj_t* idLbl = lv_label_create(row);
+        lv_obj_set_style_text_font(idLbl, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(idLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
+        lv_label_set_long_mode(idLbl, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(idLbl, Theme::CONTENT_W - 16);
+        std::string identity = identityLineFor(node);
+        lv_label_set_text(idLbl, identity.c_str());
+        lv_obj_set_pos(idLbl, 8, 20);
     };
 
     // Build list: Contacts section, then Online section
     if (!_sortedContactIndices.empty()) {
         char hdrBuf[32];
-        snprintf(hdrBuf, sizeof(hdrBuf), "Contacts (%d)", (int)_sortedContactIndices.size());
+        snprintf(hdrBuf, sizeof(hdrBuf), "TRUSTED CONTACTS (%d)", (int)_sortedContactIndices.size());
         addHeader(hdrBuf);
         for (int idx : _sortedContactIndices) addNodeRow(idx);
     }
 
     {
         char hdrBuf[32];
-        snprintf(hdrBuf, sizeof(hdrBuf), "Online (%d)", (int)_sortedOnlineIndices.size());
+        snprintf(hdrBuf, sizeof(hdrBuf), "RECENT PEERS (%d)", (int)_sortedOnlineIndices.size());
         addHeader(hdrBuf);
         for (int idx : _sortedOnlineIndices) addNodeRow(idx);
     }
@@ -270,6 +401,32 @@ int LvNodesScreen::getFocusedNodeIdx() const {
 
 // --- Action modal helpers ---
 
+void LvNodesScreen::updateOverlayDetails(const char* title) {
+    if (!_overlayTitle || !_overlayMeta || !_overlayReach) return;
+
+    if (!_am || _actionNodeIdx < 0 || _actionNodeIdx >= (int)_am->nodes().size()) {
+        lv_label_set_text(_overlayTitle, title ? title : "Peer");
+        lv_label_set_text(_overlayMeta, "ID: unavailable");
+        lv_label_set_text(_overlayReach, "No route data");
+        return;
+    }
+
+    const auto& node = _am->nodes()[_actionNodeIdx];
+    unsigned long age = nodeAgeMs(node, millis());
+    bool devMode = _cfg && _cfg->settings().devMode;
+
+    std::string heading = title ? title : displayNameFor(node);
+    std::string identity = identityLineFor(node);
+    std::string details = node.saved ? "Saved contact / " : "Peer / ";
+    details += peerMetaFor(node, age, devMode);
+
+    lv_obj_set_style_text_color(_overlayTitle, lv_color_hex(node.saved ? Theme::ACCENT : Theme::PRIMARY), 0);
+    lv_obj_set_style_text_color(_overlayReach, lv_color_hex(Theme::TEXT_SECONDARY), 0);
+    lv_label_set_text(_overlayTitle, heading.c_str());
+    lv_label_set_text(_overlayMeta, identity.c_str());
+    lv_label_set_text(_overlayReach, details.c_str());
+}
+
 void LvNodesScreen::showActionMenu(int nodeIdx) {
     _actionNodeIdx = nodeIdx;
     _menuIdx = 0;
@@ -278,8 +435,11 @@ void LvNodesScreen::showActionMenu(int nodeIdx) {
     if (_overlay) {
         if (_am && nodeIdx >= 0 && nodeIdx < (int)_am->nodes().size()) {
             bool isSaved = _am->nodes()[nodeIdx].saved;
-            lv_label_set_text(_menuLabels[0], isSaved ? "Edit Name" : "Add Contact");
+            lv_label_set_text(_menuLabels[0], isSaved ? "Edit Name" : "Save Contact");
+            lv_label_set_text(_menuLabels[1], "Message");
+            lv_label_set_text(_menuLabels[2], "Close");
         }
+        updateOverlayDetails(nullptr);
         for (int i = 0; i < 3; i++) lv_obj_clear_flag(_menuBtns[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(_nicknameBox, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
@@ -299,6 +459,7 @@ void LvNodesScreen::showNicknameInput() {
     if (_am && _actionNodeIdx >= 0 && _actionNodeIdx < (int)_am->nodes().size()) {
         _nicknameText = String(_am->nodes()[_actionNodeIdx].name.c_str());
     }
+    updateOverlayDetails("Set contact name");
     for (int i = 0; i < 3; i++) lv_obj_add_flag(_menuBtns[i], LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(_nicknameBox, LV_OBJ_FLAG_HIDDEN);
     updateNicknameDisplay();
@@ -308,10 +469,11 @@ void LvNodesScreen::updateMenuSelection() {
     for (int i = 0; i < 3; i++) {
         bool sel = (i == _menuIdx);
         lv_obj_set_style_text_color(_menuLabels[i], lv_color_hex(
-            sel ? Theme::TEXT_PRIMARY : Theme::TEXT_SECONDARY), 0);
+            sel ? Theme::ACCENT : Theme::TEXT_SECONDARY), 0);
         lv_obj_set_style_bg_color(_menuBtns[i], lv_color_hex(
-            sel ? Theme::BG_HOVER : Theme::BG_SURFACE), 0);
+            sel ? Theme::PRIMARY_SUBTLE : Theme::BG_SURFACE), 0);
         lv_obj_set_style_bg_opa(_menuBtns[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(_menuBtns[i], lv_color_hex(sel ? Theme::BORDER_ACTIVE : Theme::BORDER), 0);
     }
 }
 
@@ -333,7 +495,7 @@ bool LvNodesScreen::handleLongPress() {
     if (node.saved) {
         _confirmDelete = true;
         _actionNodeIdx = nodeIdx;
-        if (_ui) _ui->lvStatusBar().showToast("Remove friend? Enter=Yes Esc=No", 5000);
+        if (_ui) _ui->lvStatusBar().showToast("Remove? Enter=Remove Esc=Keep", 5000);
     } else {
         showActionMenu(nodeIdx);
     }
@@ -366,7 +528,7 @@ bool LvNodesScreen::handleKey(const KeyEvent& event) {
                 node.name = finalName.c_str();
                 node.saved = true;
                 _am->saveContacts();
-                if (_ui) _ui->lvStatusBar().showToast("Contact saved!", 1200);
+                if (_ui) _ui->lvStatusBar().showToast("Contact saved", 1200);
                 hideOverlay();
                 rebuildList();
             } else {
@@ -427,14 +589,14 @@ bool LvNodesScreen::handleKey(const KeyEvent& event) {
         if (event.enter || event.character == '\n' || event.character == '\r') {
             if (_actionNodeIdx >= 0 && _actionNodeIdx < (int)_am->nodes().size()) {
                 _am->deleteContact(_actionNodeIdx);
-                if (_ui) _ui->lvStatusBar().showToast("Contact deleted", 1200);
+                if (_ui) _ui->lvStatusBar().showToast("Contact removed", 1200);
                 rebuildList();
             }
             _confirmDelete = false;
             return true;
         }
         _confirmDelete = false;
-        if (_ui) _ui->lvStatusBar().showToast("Cancelled", 800);
+        if (_ui) _ui->lvStatusBar().showToast("Kept contact", 800);
         return true;
     }
 

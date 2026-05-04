@@ -9,29 +9,33 @@ public:
     void update();
 
     // Status setters
-    void setLoRaOnline(bool online) { _loraOnline = online; }
-    void setBLEActive(bool active) { _bleActive = active; }
-    void setBLEEnabled(bool enabled) { _bleEnabled = enabled; }
-    void setWiFiActive(bool active) { _wifiActive = active; }
-    void setWiFiEnabled(bool enabled) { _wifiEnabled = enabled; }
-    void setTCPConnected(bool connected) { _tcpConnected = connected; }
-    // -1 = disabled (hide); 0 = yellow (idle); >0 = green (peers)
-    void setAutoIfacePeers(int n) { _autoIfacePeers = n; }
+    void setLoRaOnline(bool online);
+    void setBLEActive(bool active);
+    void setBLEEnabled(bool enabled);
+    void setWiFiActive(bool active);
+    void setWiFiEnabled(bool enabled);
+    void setTCPConnected(bool connected);
+    // -1 = disabled/muted; 0 = yellow (idle); >0 = green (peers)
+    void setAutoIfacePeers(int n);
     void setGPSFix(bool hasFix);
     void setBatteryPercent(int pct);
     void flashAnnounce();
     void showToast(const char* msg, uint32_t durationMs = 1500);
 
     // Time display
-    void setUse24Hour(bool use24h) { _use24h = use24h; }
+    void setUse24Hour(bool use24h);
     void updateTime();   // Call at 1 Hz to refresh clock
 
     lv_obj_t* obj() { return _bar; }
 
 private:
+    void refreshIndicators();
+    void refreshBattery();
+    void refreshTimeColor();
+
     lv_obj_t* _bar = nullptr;
     lv_obj_t* _lblTime = nullptr;       // Left: current time
-    lv_obj_t* _lblBrand = nullptr;      // Center: "Ratspeak.org"
+    lv_obj_t* _lblLinks = nullptr;      // Center: brand/status text
     lv_obj_t* _lblBatt = nullptr;       // Right: battery %
     lv_obj_t* _toast = nullptr;
     lv_obj_t* _lblToast = nullptr;

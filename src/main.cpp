@@ -1,5 +1,5 @@
 // =============================================================================
-// RatDeck v1.5 — Main Entry Point
+// Ratdeck — Main Entry Point
 // LilyGo T-Deck Plus: LovyanGFX Direct UI + microReticulum + LXMF Messaging
 // =============================================================================
 
@@ -46,16 +46,20 @@
 #include "reticulum/IdentityManager.h"
 #include "transport/LoRaInterface.h"
 #include "transport/WiFiInterface.h"
+#include <WiFiMulti.h>
 #include "transport/TCPClientInterface.h"
-#include "transport/BLEInterface.h"
 #include "transport/AutoInterfaceWrapper.h"
+#if HAS_BLE
+#include "transport/BLEInterface.h"
 #include "transport/BLESideband.h"
+#endif
 #include "config/UserConfig.h"
 #include "audio/AudioNotify.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <list>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <freertos/task.h>
 
 // --- Hardware ---
@@ -89,8 +93,12 @@ WiFiInterface* wifiImpl = nullptr;
 RNS::Interface wifiIface({RNS::Type::NONE});
 std::vector<TCPClientInterface*> tcpClients;
 std::list<RNS::Interface> tcpIfaces;  // Must persist — Transport stores references (list: no realloc)
+std::list<TCPClientInterface*> retiredTcpClients;
+bool tcpReloadRequested = false;
+#if HAS_BLE
 BLEInterface bleInterface;
 BLESideband bleSideband;
+#endif
 UserConfig userConfig;
 Power powerMgr;
 AudioNotify audio;
@@ -120,7 +128,9 @@ LvScreen* lvTabScreens[LvTabBar::TAB_COUNT] = {};
 bool radioOnline = false;
 bool bootComplete = false;
 bool bootLoopRecovery = false;
+bool sdHadExistingData = false;
 bool wifiSTAStarted = false;
+WiFiMulti wifiMulti;
 bool wifiSTAConnected = false;
 unsigned long lastAutoAnnounce = 0;
 unsigned long lastStatusUpdate = 0;
@@ -132,8 +142,6 @@ unsigned long maxLoopTime = 0;
 unsigned long lastLvglTime = 0;
 constexpr unsigned long LVGL_INTERVAL_MS = 33;          // ~30 FPS
 constexpr unsigned long TCP_GLOBAL_BUDGET_MS = 35;      // Max cumulative TCP time per loop
-bool wifiDeferredAnnounce = false;
-unsigned long wifiConnectedAt = 0;
 
 AutoInterfaceWrapper autoIface;
 bool autoIfaceDeferredStart = false;
@@ -157,11 +165,11 @@ static const char* currentPosixTZ() {
 // Announce with display name (MessagePack-encoded app_data)
 // =============================================================================
 
-// LXMF announce app_data, current upstream format:
-//   [display_name(bin), stamp_cost(uint), supported_functionality(array)]
+// LXMF announce app_data:
+//   [display_name(bin), stamp_cost(nil|uint), supported_functionality(array)]
 // Always emit fixarray(3) so Python LXMF doesn't default auto_compress=True for
-// our destinations. Empty supported_functionality list = we do NOT support
-// SF_COMPRESSION (bz2) — see microReticulum/src/Compression/BZ2.cpp.
+// our destinations. stamp_cost=nil means no inbound stamp is required. Empty
+// supported_functionality list = we do NOT support SF_COMPRESSION (bz2).
 RNS::Bytes encodeAnnounceName(const String& name) {
     size_t nameLen = name.length();
     if (nameLen > 31) nameLen = 31;
@@ -171,12 +179,31 @@ RNS::Bytes encodeAnnounceName(const String& name) {
     buf[i++] = 0xC4;                   // bin 8
     buf[i++] = (uint8_t)nameLen;
     if (nameLen) { memcpy(buf + i, name.c_str(), nameLen); i += nameLen; }
-    buf[i++] = 0x00;                   // stamp_cost = 0
+    buf[i++] = 0xC0;                   // stamp_cost = nil (no stamp required)
     buf[i++] = 0x90;                   // empty fixarray (no SF_* supported)
     return RNS::Bytes(buf, i);
 }
 
-static void announceWithName(bool silent = false) {
+static bool hasUsableAnnounceTransport() {
+    if (!rns.isTransportActive()) return false;
+    if (radioOnline) return true;
+    if (wifiImpl && wifiImpl->isAPActive() && wifiImpl->getClientCount() > 0) return true;
+    for (auto* tcp : tcpClients) {
+        if (tcp && tcp->isConnected()) return true;
+    }
+#if HAS_BLE
+    if (bleInterface.isClientConnected()) return true;
+#endif
+    if (autoIface.isOnline() && autoIface.peerCount() > 0) return true;
+    return false;
+}
+
+static bool announceWithName(bool silent = false) {
+    if (!hasUsableAnnounceTransport()) {
+        if (!silent) ui.lvStatusBar().showToast("No active transport", 1500);
+        Serial.println("[ANNOUNCE-TX] skipped: no active transport");
+        return false;
+    }
     RNS::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
     Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes silent=%s\n",
         userConfig.settings().displayName.c_str(), (int)appData.size(),
@@ -186,20 +213,50 @@ static void announceWithName(bool silent = false) {
         ui.lvStatusBar().flashAnnounce();
         ui.lvStatusBar().showToast("Announce sent!");
     }
+    return true;
+}
+
+static void manualAnnounce() {
+    if (announceWithName()) Serial.println("[ANNOUNCE] Manual announce sent");
 }
 
 // =============================================================================
 // TCP client management — stop old clients, create new from config
 // =============================================================================
 
+static void drainRetiredTCPClients() {
+    for (auto it = retiredTcpClients.begin(); it != retiredTcpClients.end(); ) {
+        TCPClientInterface* tcp = *it;
+        if (!tcp || tcp->canDestroy()) {
+            if (tcp) delete tcp;
+            it = retiredTcpClients.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+static void retireTCPClient(TCPClientInterface* tcp) {
+    if (!tcp) return;
+    tcp->stop();
+    if (tcp->canDestroy()) {
+        delete tcp;
+    } else {
+        retiredTcpClients.push_back(tcp);
+    }
+}
+
 static void reloadTCPClients() {
     // Stop and deregister existing clients
-    for (auto* tcp : tcpClients) tcp->stop();
     for (auto& iface : tcpIfaces) {
         RNS::Transport::deregister_interface(iface);
     }
+    for (auto* tcp : tcpClients) {
+        retireTCPClient(tcp);
+    }
     tcpClients.clear();
     tcpIfaces.clear();
+    drainRetiredTCPClients();
 
     // Create new clients from current config
     if (WiFi.status() == WL_CONNECTED) {
@@ -224,6 +281,10 @@ static void reloadTCPClients() {
     }
 }
 
+static void requestTCPClientsReload() {
+    tcpReloadRequested = true;
+}
+
 // =============================================================================
 // Hotkey callbacks
 // =============================================================================
@@ -236,15 +297,27 @@ void onHotkeyMessages() {
     ui.setScreen(&lvMessagesScreen);
 }
 void onHotkeyNewMsg() {
-    ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
-    ui.setScreen(&lvMessagesScreen);
+    bool hasContacts = false;
+    if (announceManager) {
+        for (const auto& node : announceManager->nodes()) {
+            if (node.saved) { hasContacts = true; break; }
+        }
+    }
+    if (hasContacts) {
+        ui.lvTabBar().setActiveTab(LvTabBar::TAB_CONTACTS);
+        ui.setScreen(&lvContactsScreen);
+    } else {
+        ui.lvTabBar().setActiveTab(LvTabBar::TAB_NODES);
+        ui.setScreen(&lvNodesScreen);
+        ui.lvStatusBar().showToast("Pick a peer to message", 1200);
+    }
 }
 void onHotkeySettings() {
     ui.lvTabBar().setActiveTab(LvTabBar::TAB_SETTINGS);
     ui.setScreen(&lvSettingsScreen);
 }
 void onHotkeyAnnounce() {
-    announceWithName();
+    manualAnnounce();
 }
 void onHotkeyAutoIface() {
     Serial.println("=== AUTOIFACE DUMP ===");
@@ -263,7 +336,7 @@ void onHotkeyAutoIface() {
 }
 void onHotkeyDiag() {
     Serial.println("=== DIAGNOSTIC DUMP ===");
-    Serial.printf("Device: RatDeck T-Deck Plus\n");
+    Serial.printf("Device: Ratdeck T-Deck Plus\n");
     Serial.printf("Identity: %s\n", rns.identityHash().c_str());
     Serial.printf("Transport: %s\n", rns.isTransportActive() ? "ACTIVE" : "OFFLINE");
     Serial.printf("Paths: %d  Links: %d\n", (int)rns.pathCount(), (int)rns.linkCount());
@@ -346,7 +419,7 @@ void setup() {
     delay(100);
     Serial.println();
     Serial.println("=================================");
-    Serial.printf("  RatDeck v%s\n", RATDECK_VERSION_STRING);
+    Serial.printf("  Ratdeck v%s\n", RATDECK_VERSION_STRING);
     Serial.println("  LilyGo T-Deck Plus");
     Serial.println("=================================");
 
@@ -366,10 +439,16 @@ void setup() {
     Serial.printf("[BOOT] Reset: %s (%d)\n", reasonStr, (int)reason);
     Serial.printf("[BOOT] Heap: %lu  PSRAM: %lu\n",
                   (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getPsramSize());
+    if (!psramFound() || heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < 1024 * 1024) {
+        Serial.printf("[BOOT] FATAL: PSRAM unavailable or too fragmented (largest=%lu)\n",
+                      (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        while (true) delay(1000);
+    }
 
     // Step 3: Initialize I2C bus (shared by keyboard + touchscreen)
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(400000);
+    Wire.setTimeOut(20);
 
     // Step 3.5: Initialize shared SPI bus
     sharedSPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
@@ -399,6 +478,7 @@ void setup() {
     digitalWrite(LORA_CS, HIGH);
     delay(10);
     if (sdStore.begin(&sharedSPI, SD_CS)) {
+        sdHadExistingData = sdStore.hasExistingData();
         sdStore.formatForRatdeck();
         Serial.println("[SD] Card ready");
     } else {
@@ -422,7 +502,13 @@ void setup() {
     Serial.println("[BOOT] Display initialized (LovyanGFX direct)");
 
     // Step 5.5: Initialize LVGL display driver
-    display.beginLVGL();
+    if (!display.beginLVGL()) {
+        display.gfx().fillScreen(TFT_BLACK);
+        display.gfx().setTextColor(TFT_RED, TFT_BLACK);
+        display.gfx().drawString("LVGL/PSRAM failed", 24, 106);
+        display.setBrightness(160);
+        while (true) delay(1000);
+    }
     Serial.println("[BOOT] LVGL initialized");
 
     // Verify radio SPI survives display init
@@ -487,12 +573,8 @@ void setup() {
     lvBootScreen.setProgress(0.60f, "Mounting flash...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
     if (!flash.begin()) {
-        Serial.println("[BOOT] Flash init failed, formatting...");
-        if (flash.format()) {
-            Serial.println("[BOOT] LittleFS formatted and mounted");
-        } else {
-            Serial.println("[BOOT] LittleFS format failed!");
-        }
+        Serial.println("[BOOT] Flash init failed; automatic formatting disabled");
+        lvBootScreen.setProgress(0.62f, "Flash mount failed");
     } else {
         Serial.println("[BOOT] LittleFS mounted OK");
     }
@@ -510,6 +592,10 @@ void setup() {
             }
         }
     }
+
+    lvBootScreen.setProgress(0.64f, "Loading config...");
+    userConfig.load(sdStore, flash);
+    inputManager.setTrackballSpeed(userConfig.settings().trackballSpeed);
 
     lvBootScreen.setProgress(0.65f, "Starting Reticulum...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
@@ -529,14 +615,14 @@ void setup() {
     // Step 16: Message store
     lvBootScreen.setProgress(0.72f, "Starting messaging...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
-    messageStore.begin(&flash, &sdStore);
+    messageStore.begin(&flash, &sdStore, userConfig.settings().sdStorageEnabled);
 
     // Step 17: LXMF init
     lxmf.begin(&rns, &messageStore);
     lxmf.setMessageCallback([](const LXMFMessage& msg) {
         Serial.printf("[LXMF] Message from %s\n", msg.sourceHash.toHex().substr(0, 8).c_str());
         ui.lvTabBar().setUnreadCount(LvTabBar::TAB_MSGS, lxmf.unreadCount());
-        audio.playMessage();
+        audio.requestMessage();
     });
     // Pre-cache unread counts so first tab switch to Messages is instant
     lxmf.unreadCount();
@@ -556,11 +642,6 @@ void setup() {
     announceManager->loadNameCache();
     announceHandler = RNS::HAnnounceHandler(announceManager);
     RNS::Transport::register_announce_handler(announceHandler);
-
-    // Step 19: User config load
-    lvBootScreen.setProgress(0.82f, "Loading config...");
-    // (LVGL boot renders via lv_timer_handler in setProgress)
-    userConfig.load(sdStore, flash);
 
     // No default TCP hub.  Users opt in via Settings → TCP Server →
     // "Ratspeak Hub" (seeds rns.ratspeak.org) or "Custom" (host/port).
@@ -631,8 +712,22 @@ void setup() {
         ui.lvStatusBar().setWiFiActive(true);
     } else if (wifiMode == RAT_WIFI_STA) {
         lvBootScreen.setProgress(0.87f, "WiFi STA starting...");
+        auto& settings = userConfig.settings();
+        auto& nets = settings.wifiSTANetworks;
+        size_t selectedSlot = settings.wifiSTASelected < WIFI_STA_MAX_NETWORKS ? settings.wifiSTASelected : 0;
+        int registered = 0;
+        if (selectedSlot < nets.size() && !nets[selectedSlot].ssid.isEmpty()) {
+            const auto& n = nets[selectedSlot];
+            wifiMulti.addAP(n.ssid.c_str(), n.password.c_str());
+            registered++;
+            Serial.printf("[WIFI] STA: using profile %u (%s)\n",
+                          (unsigned)(selectedSlot + 1), n.ssid.c_str());
+        } else {
+            Serial.printf("[WIFI] STA: selected profile %u is empty\n",
+                          (unsigned)(selectedSlot + 1));
+        }
         // WiFi is enabled but not yet connected — indicator will be yellow
-        if (!userConfig.settings().wifiSTASSID.isEmpty()) {
+        if (registered > 0) {
             WiFi.mode(WIFI_STA);
             WiFi.setAutoReconnect(true);
             // AutoInterface needs an IPv6 link-local address.  Must be enabled
@@ -641,19 +736,19 @@ void setup() {
                 WiFi.enableIpV6();
                 Serial.println("[WIFI] IPv6 enabled (AutoInterface ON)");
             }
-            WiFi.begin(userConfig.settings().wifiSTASSID.c_str(),
-                       userConfig.settings().wifiSTAPassword.c_str());
+            wifiMulti.run(5000);
             wifiSTAStarted = true;
-            Serial.printf("[WIFI] STA: %s\n", userConfig.settings().wifiSTASSID.c_str());
+            Serial.printf("[WIFI] STA: %d selected profile registered\n", registered);
         }
     } else {
         lvBootScreen.setProgress(0.87f, "WiFi disabled");
         // (LVGL boot renders via lv_timer_handler in setProgress)
     }
 
-    // Step 23: BLE start
-    lvBootScreen.setProgress(0.90f, "BLE...");
+    // Step 23: BLE stays disabled in default builds.
+    lvBootScreen.setProgress(0.90f, "Links ready");
     // (LVGL boot renders via lv_timer_handler in setProgress)
+#if HAS_BLE
     ui.lvStatusBar().setBLEEnabled(userConfig.settings().bleEnabled);
     if (userConfig.settings().bleEnabled) {
         bleInterface.setSideband(&bleSideband);
@@ -675,6 +770,11 @@ void setup() {
     } else {
         Serial.println("[BLE] Disabled by config");
     }
+#else
+    ui.lvStatusBar().setBLEEnabled(false);
+    ui.lvStatusBar().setBLEActive(false);
+    Serial.println("[BLE] Disabled in default firmware build");
+#endif
 
     // Step 24: Power manager
     lvBootScreen.setProgress(0.92f, "Power manager...");
@@ -735,8 +835,17 @@ void setup() {
     lvHomeScreen.setRadioOnline(radioOnline);
     lvHomeScreen.setTCPClients(&tcpClients);
     lvHomeScreen.setAnnounceCallback([]() {
-        announceWithName();
+        manualAnnounce();
         Serial.println("[HOME] Announce triggered via Enter");
+    });
+    lvHomeScreen.setAudioToggleCallback([]() {
+        userConfig.settings().audioEnabled = !userConfig.settings().audioEnabled;
+        audio.setEnabled(userConfig.settings().audioEnabled);
+        bool ok = userConfig.save(sdStore, flash);
+        ui.lvStatusBar().showToast(userConfig.settings().audioEnabled ? "Audio ON" : "Audio OFF", 1000);
+        Serial.printf("[AUDIO] Notifications %s (save %s)\n",
+                      userConfig.settings().audioEnabled ? "ON" : "OFF",
+                      ok ? "OK" : "FAILED");
     });
 
     lvContactsScreen.setAnnounceManager(announceManager);
@@ -785,14 +894,14 @@ void setup() {
     lvSettingsScreen.setIdentityHash(rns.destinationHashStr());
     lvSettingsScreen.setDestinationHash(rns.destinationHashHex());
     lvSettingsScreen.setSaveCallback([]() -> bool {
+        inputManager.setTrackballSpeed(userConfig.settings().trackballSpeed);
         bool ok = userConfig.save(sdStore, flash);
         Serial.printf("[CONFIG] Save %s\n", ok ? "OK" : "FAILED");
         return ok;
     });
     lvSettingsScreen.setTCPChangeCallback([]() {
-        Serial.println("[TCP] Settings changed, reloading...");
-        reloadTCPClients();
-        if (announceManager) announceManager->clearTransientNodes();
+        Serial.println("[TCP] Settings changed, scheduling reload...");
+        requestTCPClientsReload();
     });
 #if HAS_GPS
     lvSettingsScreen.setGPSChangeCallback([](bool timeEnabled) {
@@ -836,7 +945,11 @@ void setup() {
             ESP.restart();
         } else {
             Serial.println("[BOOT] User chose to keep old data");
-            ui.setScreen(&lvNameInputScreen);
+            userConfig.settings().sdStorageEnabled = true;
+            userConfig.save(sdStore, flash);
+            lvDataCleanScreen.showStatus("SD storage enabled. Rebooting...");
+            delay(1500);
+            ESP.restart();
         }
     });
 
@@ -846,9 +959,7 @@ void setup() {
         ui.setBootMode(false);
         ui.setScreen(&lvHomeScreen);
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_HOME);
-        announceWithName();
-        lastAutoAnnounce = millis();
-        Serial.println("[BOOT] Initial announce sent");
+        Serial.println("[BOOT] Home ready; first auto announce after configured interval");
     };
 
     // Show timezone screen, then go home
@@ -910,7 +1021,10 @@ void setup() {
         showTimezone();
     });
 
-    if (userConfig.settings().displayName.isEmpty()) {
+    if (sdHadExistingData && !userConfig.settings().sdStorageEnabled) {
+        ui.setScreen(&lvDataCleanScreen);
+        Serial.println("[BOOT] Existing SD data found; waiting for user choice");
+    } else if (userConfig.settings().displayName.isEmpty()) {
         // First boot — go to name input
         ui.setScreen(&lvNameInputScreen);
         Serial.println("[BOOT] Showing name input screen");
@@ -938,7 +1052,7 @@ void setup() {
         keyboard.backlightOn();
     }
 
-    Serial.println("[BOOT] RatDeck ready");
+    Serial.println("[BOOT] Ratdeck ready");
     Serial.printf("[BOOT] Summary: radio=%s flash=%s sd=%s\n",
                   radioOnline ? "ONLINE" : "OFFLINE",
                   flash.isReady() ? "OK" : "FAIL",
@@ -973,27 +1087,33 @@ void loop() {
         if (lvHelpOverlay.isVisible()) {
             lvHelpOverlay.handleKey(evt);
         }
-        // Ctrl+hotkeys first
-        else if (!hotkeys.process(evt)) {
-            // Screen gets the key first
+        else {
+            // Screen-local input owns the keyboard. This keeps message and
+            // settings text entry from being preempted by global shortcuts.
             bool consumed = ui.handleKey(evt);
+            if (!consumed) {
+                bool hotkeyAllowed = !ui.isBootMode() || (evt.ctrl && evt.character == 'h');
+                bool hotkeyConsumed = hotkeyAllowed && hotkeys.process(evt);
+                if (!hotkeyConsumed) {
 
-            // Feed to LVGL input system only if the screen didn't consume it
-            if (!consumed) LvInput::feedKey(evt);
+                    // Feed to LVGL input system only if the screen didn't consume it
+                    LvInput::feedKey(evt);
 
-            // Tab cycling: ,=left /=right OR trackball left/right (only if screen didn't consume)
-            if (!consumed && !evt.ctrl) {
-                bool tabLeft  = (evt.character == ',') || evt.left;
-                bool tabRight = (evt.character == '/') || evt.right;
-                if (tabLeft) {
-                    ui.lvTabBar().cycleTab(-1);
-                    int tab = ui.lvTabBar().getActiveTab();
-                    if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
-                }
-                if (tabRight) {
-                    ui.lvTabBar().cycleTab(1);
-                    int tab = ui.lvTabBar().getActiveTab();
-                    if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
+                    // Tab cycling: ,=left /=right OR trackball left/right (only if screen didn't consume)
+                    if (!evt.ctrl && !ui.isBootMode()) {
+                        bool tabLeft  = (evt.character == ',') || evt.left;
+                        bool tabRight = (evt.character == '/') || evt.right;
+                        if (tabLeft) {
+                            ui.lvTabBar().cycleTab(-1);
+                            int tab = ui.lvTabBar().getActiveTab();
+                            if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
+                        }
+                        if (tabRight) {
+                            ui.lvTabBar().cycleTab(1);
+                            int tab = ui.lvTabBar().getActiveTab();
+                            if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
+                        }
+                    }
                 }
             }
         }
@@ -1027,7 +1147,8 @@ void loop() {
         lv_timer_handler();
     }
 
-    // 5. Auto-announce every 5-360 minutes (user configured)
+    // 5. Auto-announce every 30-360 minutes from boot. Manual announces do
+    // not reset this schedule.
     const unsigned long announceInterval = (unsigned long)userConfig.settings().announceInterval * 60000; // m -> ms
     if (bootComplete && millis() - lastAutoAnnounce >= announceInterval) {
         lastAutoAnnounce = millis();
@@ -1042,6 +1163,7 @@ void loop() {
     // 6. LXMF outgoing queue + announce manager deferred saves
     lxmf.loop();
     if (announceManager) announceManager->loop();
+    audio.loop();
 
     // 7. WiFi STA connection handler
     if (wifiSTAStarted) {
@@ -1060,9 +1182,6 @@ void loop() {
 
             // Recreate TCP clients on every WiFi connect (old clients may have stale sockets)
             reloadTCPClients();
-            // Defer announce to let VPS register the connection (non-blocking)
-            wifiDeferredAnnounce = true;
-            wifiConnectedAt = millis();
             // Arm AutoInterface deferred-start; SLAAC needs ~1.5–10s to assign
             // a link-local IPv6 address, so we don't start the interface here.
             // Trigger link-local creation AFTER association (calling
@@ -1078,31 +1197,17 @@ void loop() {
             ui.lvStatusBar().setWiFiActive(false);
             ui.lvStatusBar().setTCPConnected(false);
             // Stop and deregister TCP clients cleanly
-            for (auto* tcp : tcpClients) tcp->stop();
             for (auto& iface : tcpIfaces) {
                 RNS::Transport::deregister_interface(iface);
+            }
+            for (auto* tcp : tcpClients) {
+                retireTCPClient(tcp);
             }
             tcpClients.clear();
             tcpIfaces.clear();
             Serial.println("[WIFI] STA disconnected, TCP interfaces deregistered");
             autoIface.stop();
             autoIfaceDeferredStart = false;
-        }
-    }
-
-    // 7.5. Deferred WiFi announce (non-blocking replacement for delay(1500))
-    if (wifiDeferredAnnounce && millis() - wifiConnectedAt >= 1500) {
-        wifiDeferredAnnounce = false;
-        bool anyTcpConnected = false;
-        for (auto* tcp : tcpClients) {
-            if (tcp->isConnected()) { anyTcpConnected = true; break; }
-        }
-        if (anyTcpConnected) {
-            Serial.println("[TCP] Sending announce over new TCP connection...");
-            announceWithName(!powerMgr.isScreenOn());
-            lastAutoAnnounce = millis();
-        } else {
-            Serial.println("[TCP] No TCP clients connected, skipping announce");
         }
     }
 
@@ -1147,8 +1252,18 @@ void loop() {
         }
     }
 
+    // 7.8. Deferred TCP reload from Settings. Avoid tearing down/recreating
+    // Transport interfaces inside the LVGL key event path.
+    if (tcpReloadRequested) {
+        tcpReloadRequested = false;
+        Serial.println("[TCP] Applying deferred settings reload...");
+        reloadTCPClients();
+        if (announceManager) announceManager->clearTransientNodes();
+    }
+
     // 8. WiFi + TCP loops (with global budget) — skip only if RNS severely overloaded
     {
+        drainRetiredTCPClients();
         bool skipTcp = (rnsDuration > 500);
         if (skipTcp) diagTcpSkipEvents++;
         if (!skipTcp && wifiImpl) wifiImpl->loop();
@@ -1168,8 +1283,10 @@ void loop() {
     }
 
     // 9. BLE loops
+#if HAS_BLE
     bleInterface.loop();
     bleSideband.loop();
+#endif
 
     // 9.5. GPS poll (non-blocking, reads available UART bytes)
 #if HAS_GPS

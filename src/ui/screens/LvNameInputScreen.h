@@ -16,7 +16,10 @@ public:
 
 private:
     lv_obj_t* _textarea = nullptr;
+    lv_obj_t* _doneButton = nullptr;
     std::function<void(const String&)> _doneCb;
     unsigned long _enterTime = 0;
     static constexpr unsigned long ENTER_GUARD_MS = 600;  // Ignore Enter for 600ms after screen appears
+
+    void submit(bool enforceEnterGuard);
 };

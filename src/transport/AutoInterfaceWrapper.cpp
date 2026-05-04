@@ -11,6 +11,8 @@ bool AutoInterfaceWrapper::start(const char* group_id,
 		Serial.println("[AUTOIFACE] start: no link-local address");
 		return false;
 	}
+	_groupId = group_id ? group_id : "";
+	_maxPeers = max_peers;
 
 	auto* impl = new RNS::AutoInterface(
 		"AutoInterface",
@@ -35,7 +37,9 @@ bool AutoInterfaceWrapper::start(const char* group_id,
 	}
 	RNS::Transport::register_interface(_wrapper);
 	_started = true;
-	Serial.printf("[AUTOIFACE] online — mcast=%s ll=%s scope=%u\n",
+	_linkLocalAddr = link_local_addr;
+	_scopeId = scope_id;
+	Serial.printf("[AUTOIFACE] online - mcast=%s ll=%s scope=%u\n",
 		_impl->multicast_address().c_str(),
 		_impl->link_local_address().c_str(),
 		(unsigned)scope_id);
@@ -62,7 +66,14 @@ void AutoInterfaceWrapper::notifyLinkChange(const String& link_local_addr,
 											uint32_t scope_id) {
 	if (!_started || !_impl) return;
 	if (link_local_addr.length() == 0) return;
-	_impl->notify_link_change(link_local_addr.c_str(), scope_id);
+	if (link_local_addr == _linkLocalAddr && scope_id == _scopeId) return;
+
+	Serial.printf("[AUTOIFACE] link-local changed - restarting ll=%s scope=%u\n",
+		link_local_addr.c_str(), (unsigned)scope_id);
+	String group = _groupId;
+	uint8_t maxPeers = _maxPeers;
+	stop();
+	start(group.c_str(), maxPeers, link_local_addr, scope_id);
 }
 
 bool AutoInterfaceWrapper::isOnline() const {

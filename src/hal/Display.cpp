@@ -29,7 +29,7 @@ bool Display::begin() {
     return true;
 }
 
-void Display::beginLVGL() {
+bool Display::beginLVGL() {
     s_gfx = &_gfx;
 
     lv_init();
@@ -45,7 +45,7 @@ void Display::beginLVGL() {
 
     if (!s_buf1 || !s_buf2) {
         Serial.println("[LVGL] FATAL: buffer allocation failed!");
-        return;
+        return false;
     }
 
     static lv_disp_draw_buf_t draw_buf;
@@ -60,6 +60,7 @@ void Display::beginLVGL() {
     lv_disp_drv_register(&disp_drv);
 
     Serial.println("[LVGL] Display driver registered (320x240, double-buffered 20-line DMA)");
+    return true;
 }
 
 void Display::setBrightness(uint8_t level) {

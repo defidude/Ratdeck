@@ -12,6 +12,8 @@ public:
     void playAnnounce();
     void playError();
     void playBoot();        // Sci-fi boot sequence
+    void requestMessage();  // Defer short alert out of packet callbacks
+    void loop();
 
     // Settings
     void setEnabled(bool enabled) { _enabled = enabled; }
@@ -25,5 +27,6 @@ private:
 
     bool _enabled = true;
     bool _i2sReady = false;
+    volatile bool _messagePending = false;
     uint8_t _volume = 80;  // 0-100
 };

@@ -54,7 +54,12 @@ private:
 
     // HDLC-like framing for TCP stream
     void sendFrame(WiFiClient& client, const uint8_t* data, size_t len);
-    int readFrame(WiFiClient& client, uint8_t* buffer, size_t maxLen);
+    struct FrameState {
+        bool inFrame = false;
+        bool escaped = false;
+        size_t pos = 0;
+    };
+    int readFrame(WiFiClient& client, FrameState& state, uint8_t* buffer, size_t maxLen);
 
     String _apSSID;
     String _apPassword;
@@ -64,6 +69,7 @@ private:
 
     WiFiServer _server;
     std::vector<WiFiClient> _clients;
+    std::vector<FrameState> _clientFrames;
     uint8_t _rxBuffer[600];
     uint8_t* _txBuffer = nullptr;
     static constexpr size_t TX_BUFFER_SIZE = 1202;  // worst-case: 600*2 + 2 delimiters

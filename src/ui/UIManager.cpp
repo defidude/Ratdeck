@@ -40,6 +40,8 @@ void UIManager::begin() {
 }
 
 void UIManager::setScreen(LvScreen* screen) {
+    if (_currentLvScreen == screen) return;
+
     // Transition from previous LVGL screen
     if (_currentLvScreen) {
         _currentLvScreen->onExit();

@@ -2,27 +2,123 @@
 #include "ui/Theme.h"
 #include "ui/LvTheme.h"
 #include "ui/LvInput.h"
+#include "ui/LxmFaceAvatar.h"
 #include "ui/UIManager.h"
 #include "reticulum/AnnounceManager.h"
 #include <Arduino.h>
+#include <algorithm>
+#include <climits>
 #include "fonts/fonts.h"
+
+namespace {
+
+constexpr int kContactRowH = 38;
+constexpr int kContactAvatar = 32;
+constexpr int kContactTextX = 48;
+
+unsigned long nodeAgeMs(const DiscoveredNode& node, unsigned long now) {
+    if (node.lastSeen == 0 || now < node.lastSeen) return ULONG_MAX;
+    return now - node.lastSeen;
+}
+
+std::string displayNameFor(const DiscoveredNode& node) {
+    if (!node.name.empty()) return node.name;
+    std::string hex = node.hash.toHex();
+    return hex.substr(0, 12);
+}
+
+std::string identityLineFor(const DiscoveredNode& node) {
+    std::string hex = node.hash.toHex();
+    return "ID: " + hex;
+}
+
+std::string compactAge(unsigned long ageMs) {
+    if (ageMs == ULONG_MAX) return "old";
+    if (ageMs < 5000) return "now";
+
+    unsigned long sec = ageMs / 1000;
+    char buf[12];
+    if (sec < 60) {
+        snprintf(buf, sizeof(buf), "%lus", sec);
+    } else if (sec < 3600) {
+        snprintf(buf, sizeof(buf), "%lum", sec / 60);
+    } else if (sec < 86400) {
+        snprintf(buf, sizeof(buf), "%luh", sec / 3600);
+    } else {
+        snprintf(buf, sizeof(buf), "%lud", sec / 86400);
+    }
+    return buf;
+}
+
+std::string contactMetaFor(const DiscoveredNode& node, unsigned long ageMs) {
+    std::string age = compactAge(ageMs);
+    if (node.hops > 0 && node.hops < 128) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%uH %s", (unsigned)node.hops, age.c_str());
+        return buf;
+    }
+    return age;
+}
+
+lv_obj_t* createEmptyState(lv_obj_t* parent) {
+    lv_obj_t* box = lv_obj_create(parent);
+    lv_obj_set_size(box, 252, 94);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_pad_all(box, 0, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(box);
+
+    lv_obj_t* head = lv_obj_create(box);
+    lv_obj_set_size(head, 18, 18);
+    lv_obj_set_pos(head, 117, 7);
+    lv_obj_set_style_radius(head, 9, 0);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(head, 2, 0);
+    lv_obj_set_style_border_color(head, lv_color_hex(Theme::PRIMARY), 0);
+    lv_obj_set_style_pad_all(head, 0, 0);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* shoulders = lv_obj_create(box);
+    lv_obj_set_size(shoulders, 36, 17);
+    lv_obj_set_pos(shoulders, 108, 27);
+    lv_obj_set_style_radius(shoulders, 8, 0);
+    lv_obj_set_style_bg_opa(shoulders, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(shoulders, 2, 0);
+    lv_obj_set_style_border_color(shoulders, lv_color_hex(Theme::BORDER_ACTIVE), 0);
+    lv_obj_set_style_pad_all(shoulders, 0, 0);
+    lv_obj_clear_flag(shoulders, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* title = lv_label_create(box);
+    lv_obj_set_style_text_font(title, &lv_font_ratdeck_14, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(Theme::TEXT_SECONDARY), 0);
+    lv_label_set_text(title, "No trusted contacts");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 49);
+
+    lv_obj_t* hint = lv_label_create(box);
+    lv_obj_set_style_text_font(hint, &lv_font_ratdeck_10, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(Theme::TEXT_MUTED), 0);
+    lv_label_set_text(hint, "Saved peers appear here");
+    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 70);
+
+    return box;
+}
+
+}  // namespace
 
 void LvContactsScreen::createUI(lv_obj_t* parent) {
     _screen = parent;
     lv_obj_set_style_bg_color(parent, lv_color_hex(Theme::BG), 0);
     lv_obj_set_style_pad_all(parent, 0, 0);
 
-    _lblEmpty = lv_label_create(parent);
-    lv_obj_set_style_text_font(_lblEmpty, &lv_font_ratdeck_14, 0);
-    lv_obj_set_style_text_color(_lblEmpty, lv_color_hex(Theme::TEXT_MUTED), 0);
-    lv_label_set_text(_lblEmpty, "No saved contacts");
-    lv_obj_center(_lblEmpty);
+    _emptyState = createEmptyState(parent);
 
     _list = lv_obj_create(parent);
     lv_obj_set_size(_list, lv_pct(100), lv_pct(100));
     lv_obj_add_style(_list, LvTheme::styleList(), 0);
     lv_obj_set_layout(_list, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_flag(_list, LV_OBJ_FLAG_HIDDEN);
 
     _lastContactCount = -1;
     rebuildList();
@@ -48,34 +144,46 @@ void LvContactsScreen::rebuildList() {
     _contactIndices.clear();
 
     lv_obj_clean(_list);
+    _avatarBuffers.clear();
 
     const auto& nodes = _am->nodes();
     for (int i = 0; i < (int)nodes.size(); i++) {
         if (nodes[i].saved) _contactIndices.push_back(i);
     }
+    std::sort(_contactIndices.begin(), _contactIndices.end(), [&nodes](int a, int b) {
+        std::string an = displayNameFor(nodes[a]);
+        std::string bn = displayNameFor(nodes[b]);
+        if (an == bn) return nodes[a].hash.toHex() < nodes[b].hash.toHex();
+        return an < bn;
+    });
     int count = (int)_contactIndices.size();
     _lastContactCount = count;
+    _avatarBuffers.reserve(count);
 
     if (count == 0) {
-        lv_obj_clear_flag(_lblEmpty, LV_OBJ_FLAG_HIDDEN);
+        if (_emptyState) lv_obj_clear_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(_list, LV_OBJ_FLAG_HIDDEN);
         return;
     }
 
-    lv_obj_add_flag(_lblEmpty, LV_OBJ_FLAG_HIDDEN);
+    if (_emptyState) lv_obj_add_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(_list, LV_OBJ_FLAG_HIDDEN);
+
+    unsigned long now = millis();
 
     for (int i = 0; i < count; i++) {
         int nodeIdx = _contactIndices[i];
         const auto& node = nodes[nodeIdx];
+        unsigned long age = nodeAgeMs(node, now);
 
         lv_obj_t* row = lv_obj_create(_list);
-        lv_obj_set_size(row, Theme::CONTENT_W, 32);
+        lv_obj_set_size(row, Theme::CONTENT_W, kContactRowH);
         lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
         lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
         lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_border_width(row, 1, 0);
         lv_obj_set_style_border_color(row, lv_color_hex(Theme::BORDER), 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(row, (void*)(intptr_t)i);
@@ -94,20 +202,40 @@ void LvContactsScreen::rebuildList() {
             lv_obj_scroll_to_view(lv_event_get_target(e), LV_ANIM_ON);
         }, LV_EVENT_FOCUSED, nullptr);
 
-        // Contact name
-        lv_obj_t* lbl = lv_label_create(row);
-        lv_obj_set_style_text_font(lbl, &lv_font_ratdeck_14, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(Theme::PRIMARY), 0);
-        lv_label_set_text(lbl, node.name.c_str());
-        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 8, 0);
+        std::string hashHex = node.hash.toHex();
+        _avatarBuffers.emplace_back(LxmFaceAvatar::bufferSize(kContactAvatar));
+        auto avatar = LxmFaceAvatar::create(row, 8, 3, kContactAvatar,
+                                            _avatarBuffers.back().data(),
+                                            Theme::PRIMARY_SUBTLE, Theme::BORDER);
+        LxmFaceAvatar::render(avatar.canvas, String(hashHex.c_str()));
 
-        // Hash suffix (right side, muted)
-        lv_obj_t* lblHash = lv_label_create(row);
-        lv_obj_set_style_text_font(lblHash, &lv_font_ratdeck_10, 0);
-        lv_obj_set_style_text_color(lblHash, lv_color_hex(Theme::TEXT_MUTED), 0);
-        std::string shortHash = node.hash.toHex().substr(0, 8);
-        lv_label_set_text(lblHash, shortHash.c_str());
-        lv_obj_align(lblHash, LV_ALIGN_RIGHT_MID, -8, 0);
+        lv_obj_t* nameLbl = lv_label_create(row);
+        lv_obj_set_style_text_font(nameLbl, &lv_font_ratdeck_14, 0);
+        lv_obj_set_style_text_color(nameLbl, lv_color_hex(Theme::ACCENT), 0);
+        lv_label_set_long_mode(nameLbl, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(nameLbl, Theme::CONTENT_W - kContactTextX - 72);
+        std::string name = displayNameFor(node);
+        lv_label_set_text(nameLbl, name.c_str());
+        lv_obj_set_pos(nameLbl, kContactTextX, 2);
+
+        lv_obj_t* metaLbl = lv_label_create(row);
+        lv_obj_set_style_text_font(metaLbl, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(metaLbl, lv_color_hex(Theme::TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_align(metaLbl, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_label_set_long_mode(metaLbl, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(metaLbl, 64);
+        std::string meta = contactMetaFor(node, age);
+        lv_label_set_text(metaLbl, meta.c_str());
+        lv_obj_set_pos(metaLbl, Theme::CONTENT_W - 72, 5);
+
+        lv_obj_t* idLbl = lv_label_create(row);
+        lv_obj_set_style_text_font(idLbl, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(idLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
+        lv_label_set_long_mode(idLbl, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(idLbl, Theme::CONTENT_W - kContactTextX - 8);
+        std::string identity = identityLineFor(node);
+        lv_label_set_text(idLbl, identity.c_str());
+        lv_obj_set_pos(idLbl, kContactTextX, 22);
     }
 
     // Clear auto-focus if user hasn't started navigating yet
@@ -127,7 +255,7 @@ bool LvContactsScreen::handleLongPress() {
     _deleteIdx = (int)(intptr_t)lv_obj_get_user_data(focused);
     if (_deleteIdx < 0 || _deleteIdx >= (int)_contactIndices.size()) return false;
     _confirmDelete = true;
-    if (_ui) _ui->lvStatusBar().showToast("Delete contact? Enter=Yes Esc=No", 5000);
+    if (_ui) _ui->lvStatusBar().showToast("Remove? Enter=Remove Esc=Keep", 5000);
     return true;
 }
 
@@ -147,7 +275,7 @@ bool LvContactsScreen::handleKey(const KeyEvent& event) {
                 int nodeIdx = _contactIndices[_deleteIdx];
                 if (nodeIdx >= 0 && nodeIdx < (int)_am->nodes().size()) {
                     _am->deleteContact(nodeIdx);
-                    if (_ui) _ui->lvStatusBar().showToast("Contact deleted", 1200);
+                    if (_ui) _ui->lvStatusBar().showToast("Contact removed", 1200);
                     rebuildList();
                 }
             }
@@ -155,7 +283,7 @@ bool LvContactsScreen::handleKey(const KeyEvent& event) {
             return true;
         }
         _confirmDelete = false;
-        if (_ui) _ui->lvStatusBar().showToast("Cancelled", 800);
+        if (_ui) _ui->lvStatusBar().showToast("Kept contact", 800);
         return true;
     }
 

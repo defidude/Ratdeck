@@ -58,7 +58,7 @@ public:
     bool begin();
 
     // Initialize LVGL display driver with double-buffered DMA flush
-    void beginLVGL();
+    bool beginLVGL();
 
     // Backlight
     void setBrightness(uint8_t level);

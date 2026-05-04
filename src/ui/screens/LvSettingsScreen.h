@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 class FlashStore;
 class SDStore;
 class SX1262;
@@ -58,7 +60,9 @@ class LvSettingsScreen : public LvScreen {
 public:
     void createUI(lv_obj_t* parent) override;
     void onEnter() override;
+    void refreshUI() override;
     bool handleKey(const KeyEvent& event) override;
+    bool handleLongPress() override;
 
     void setUserConfig(UserConfig* cfg) { _cfg = cfg; }
     void setFlashStore(FlashStore* fs) { _flash = fs; }
@@ -93,12 +97,28 @@ private:
     void rebuildCategoryList();
     void rebuildItemList();
     void rebuildWifiList();
+    void selectWifiResult(int resultIdx);
 
     void enterCategory(int catIdx);
     void exitToCategories();
     void updateCategorySelection(int oldIdx, int newIdx);
     void updateItemSelection(int oldIdx, int newIdx);
     void updateWifiSelection(int oldIdx, int newIdx);
+    bool settingNeedsReboot(const SettingItem& item) const;
+    bool categoryNeedsReboot(int catIdx) const;
+    bool confirmableAction(const SettingItem& item) const;
+    bool armedAction(const SettingItem& item) const;
+    bool destructiveAction(const SettingItem& item) const;
+    const char* confirmationTitle() const;
+    const char* confirmationDetail() const;
+    bool hasPendingConfirmation() const;
+    void clearConfirmations();
+    void runFormatSD();
+    void runWipeSD();
+    void runFactoryReset();
+    void runEnableDevMode();
+    void startFirmwareCheck();
+    static void firmwareCheckTask(void* arg);
 
     UserConfig* _cfg = nullptr;
     FlashStore* _flash = nullptr;
@@ -132,8 +152,21 @@ private:
     bool _numericTyping = false;   // true once user types digits in INTEGER edit
     bool _textEditing = false;
     String _editText;
+    bool _confirmingInitSD = false;
+    bool _confirmingWipeSD = false;
     bool _confirmingReset = false;
     bool _confirmingDevMode = false;
+
+    enum class FirmwareCheckState : uint8_t {
+        IDLE,
+        RUNNING,
+        CURRENT,
+        AVAILABLE,
+        FAILED
+    };
+    volatile FirmwareCheckState _fwCheckState = FirmwareCheckState::IDLE;
+    TaskHandle_t _fwCheckTask = nullptr;
+    char _fwCheckVersion[24] = {};
 
     // Frequency digit-cursor editor (radio-style)
     bool _freqEditing = false;
@@ -147,15 +180,17 @@ private:
     // WiFi picker
     std::vector<WiFiInterface::ScanResult> _wifiResults;
     int _wifiPickerIdx = 0;
+    size_t _wifiTargetSlot = 0;
+    bool _wifiScanActive = false;
 
     // Reboot-required tracking
     bool _rebootNeeded = false;
     struct RebootSnapshot {
         RatWiFiMode wifiMode;
-        String wifiSTASSID;
-        String wifiSTAPassword;
-        bool bleEnabled;
+        std::vector<WiFiNetwork> wifiSTANetworks;
+        uint8_t wifiSTASelected;
         bool autoIfaceEnabled;
+        bool sdStorageEnabled;
     };
     RebootSnapshot _rebootSnap;
     void snapshotRebootSettings();

@@ -6,13 +6,20 @@
 
 constexpr const char* LvTabBar::TAB_NAMES[TAB_COUNT];
 
+static lv_obj_t* tab_cell_from_target(LvTabBar* bar, lv_obj_t* target) {
+    while (target && target != bar->obj()) {
+        lv_obj_t* parent = lv_obj_get_parent(target);
+        if (parent == bar->obj()) return target;
+        target = parent;
+    }
+    return nullptr;
+}
+
 static void tab_click_cb(lv_event_t* e) {
     LvTabBar* bar = (LvTabBar*)lv_event_get_user_data(e);
-    lv_obj_t* target = lv_event_get_target(e);
+    lv_obj_t* target = tab_cell_from_target(bar, lv_event_get_target(e));
     for (int i = 0; i < LvTabBar::TAB_COUNT; i++) {
-        lv_obj_t* parent = lv_obj_get_parent(target);
-        if (target == lv_obj_get_child(bar->obj(), i) ||
-            (parent && parent == lv_obj_get_child(bar->obj(), i))) {
+        if (target == lv_obj_get_child(bar->obj(), i)) {
             bar->setActiveTab(i);
             break;
         }
@@ -23,27 +30,42 @@ void LvTabBar::create(lv_obj_t* parent) {
     _bar = lv_obj_create(parent);
     lv_obj_set_size(_bar, Theme::SCREEN_W, Theme::TAB_BAR_H);
     lv_obj_align(_bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_set_style_bg_color(_bar, lv_color_hex(Theme::BG), 0);
-    lv_obj_set_style_bg_opa(_bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(_bar, lv_color_hex(Theme::DIVIDER), 0);
-    lv_obj_set_style_border_width(_bar, 1, 0);
-    lv_obj_set_style_border_side(_bar, LV_BORDER_SIDE_TOP, 0);
-    lv_obj_set_style_pad_all(_bar, 0, 0);
-    lv_obj_set_style_radius(_bar, 0, 0);
+    lv_obj_add_style(_bar, LvTheme::styleTabBar(), 0);
     lv_obj_clear_flag(_bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_layout(_bar, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(_bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(_bar, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    const lv_font_t* font = &lv_font_ratdeck_12;
+    lv_obj_set_flex_align(_bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(_bar, 0, 0);
 
     for (int i = 0; i < TAB_COUNT; i++) {
-        _tabs[i] = lv_label_create(_bar);
-        lv_obj_set_style_text_font(_tabs[i], font, 0);
-        lv_label_set_recolor(_tabs[i], true);
-        lv_label_set_text(_tabs[i], TAB_NAMES[i]);
-        lv_obj_add_flag(_tabs[i], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(_tabs[i], tab_click_cb, LV_EVENT_CLICKED, this);
+        _cells[i] = lv_obj_create(_bar);
+        lv_obj_set_size(_cells[i], Theme::TAB_W, Theme::TAB_BAR_H);
+        lv_obj_add_style(_cells[i], LvTheme::styleTabCell(), 0);
+        lv_obj_add_style(_cells[i], LvTheme::styleTabCellActive(), LV_STATE_CHECKED);
+        lv_obj_clear_flag(_cells[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(_cells[i], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(_cells[i], tab_click_cb, LV_EVENT_CLICKED, this);
+
+        _labels[i] = lv_label_create(_cells[i]);
+        lv_obj_set_size(_labels[i], Theme::TAB_W - 4, 14);
+        lv_label_set_long_mode(_labels[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_style_text_font(_labels[i], &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_align(_labels[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_text(_labels[i], TAB_NAMES[i]);
+        lv_obj_align(_labels[i], LV_ALIGN_CENTER, 0, 2);
+
+        _badges[i] = lv_obj_create(_cells[i]);
+        lv_obj_set_size(_badges[i], Theme::TAB_BADGE_W, Theme::TAB_BADGE_H);
+        lv_obj_add_style(_badges[i], LvTheme::styleBadge(), 0);
+        lv_obj_clear_flag(_badges[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(_badges[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(_badges[i], LV_ALIGN_TOP_RIGHT, -3, 2);
+
+        _badgeLabels[i] = lv_label_create(_badges[i]);
+        lv_label_set_long_mode(_badgeLabels[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_style_text_font(_badgeLabels[i], &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_align(_badgeLabels[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(_badgeLabels[i]);
     }
 
     refreshTabs();
@@ -63,26 +85,31 @@ void LvTabBar::cycleTab(int direction) {
 
 void LvTabBar::setUnreadCount(int tab, int count) {
     if (tab < 0 || tab >= TAB_COUNT) return;
+    if (count < 0) count = 0;
     if (_unread[tab] == count) return;  // No change
     _unread[tab] = count;
     refreshTab(tab);
 }
 
 void LvTabBar::refreshTab(int idx) {
-    if (idx < 0 || idx >= TAB_COUNT || !_tabs[idx]) return;
+    if (idx < 0 || idx >= TAB_COUNT || !_cells[idx] || !_labels[idx]) return;
     bool active = (idx == _activeTab);
-    lv_obj_set_style_text_color(_tabs[idx],
-        lv_color_hex(active ? Theme::TAB_ACTIVE : Theme::TAB_INACTIVE), 0);
+    if (active) lv_obj_add_state(_cells[idx], LV_STATE_CHECKED);
+    else lv_obj_clear_state(_cells[idx], LV_STATE_CHECKED);
 
-    char buf[48];
-    if (_unread[idx] > 0) {
-        // Unread count in badge color using LVGL recolor
-        snprintf(buf, sizeof(buf), "%s #%06X %d#",
-            TAB_NAMES[idx], (unsigned int)Theme::BADGE_BG, _unread[idx]);
+    lv_obj_set_style_text_color(_labels[idx],
+        lv_color_hex(active ? Theme::TAB_ACTIVE : Theme::TAB_INACTIVE), 0);
+    lv_label_set_text(_labels[idx], TAB_NAMES[idx]);
+
+    if (_badges[idx] && _badgeLabels[idx] && _unread[idx] > 0) {
+        char buf[4];
+        if (_unread[idx] > 9) snprintf(buf, sizeof(buf), "9+");
+        else snprintf(buf, sizeof(buf), "%d", _unread[idx]);
+        lv_label_set_text(_badgeLabels[idx], buf);
+        lv_obj_clear_flag(_badges[idx], LV_OBJ_FLAG_HIDDEN);
     } else {
-        snprintf(buf, sizeof(buf), "%s", TAB_NAMES[idx]);
+        if (_badges[idx]) lv_obj_add_flag(_badges[idx], LV_OBJ_FLAG_HIDDEN);
     }
-    lv_label_set_text(_tabs[idx], buf);
 }
 
 void LvTabBar::refreshTabs() {

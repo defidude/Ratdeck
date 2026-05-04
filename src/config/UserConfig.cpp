@@ -2,7 +2,7 @@
 #include "config/BoardConfig.h"
 
 bool UserConfig::parseJson(const String& json) {
-    Serial.printf("[CONFIG] Raw JSON (%d bytes): %s\n", json.length(), json.c_str());
+    Serial.printf("[CONFIG] Parsing config (%d bytes)\n", json.length());
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
@@ -28,8 +28,25 @@ bool UserConfig::parseJson(const String& json) {
     }
     _settings.wifiAPSSID     = doc["wifi_ap_ssid"]     | "";
     _settings.wifiAPPassword = doc["wifi_ap_pass"]     | WIFI_AP_PASSWORD;
-    _settings.wifiSTASSID    = doc["wifi_sta_ssid"]    | "";
-    _settings.wifiSTAPassword = doc["wifi_sta_pass"]   | "";
+    _settings.wifiSTASelected = constrain((int)(doc["wifi_sta_selected"] | 0), 0, (int)WIFI_STA_MAX_NETWORKS - 1);
+
+    // Migrate legacy single-network config into the multi-network list.
+    _settings.wifiSTANetworks.clear();
+    JsonArray staArr = doc["wifi_sta_networks"];
+    if (staArr) {
+        for (JsonObject obj : staArr) {
+            if (_settings.wifiSTANetworks.size() >= WIFI_STA_MAX_NETWORKS) break;
+            WiFiNetwork n;
+            n.ssid = obj["ssid"] | "";
+            n.password = obj["pass"] | "";
+            _settings.wifiSTANetworks.push_back(n);
+        }
+    } else {
+        WiFiNetwork legacy;
+        legacy.ssid = doc["wifi_sta_ssid"] | "";
+        legacy.password = doc["wifi_sta_pass"] | "";
+        if (!legacy.ssid.isEmpty()) _settings.wifiSTANetworks.push_back(legacy);
+    }
 
     // AutoInterface (LAN auto-discovery)
     _settings.autoIfaceEnabled  = doc["autoiface_en"]    | false;
@@ -57,12 +74,12 @@ bool UserConfig::parseJson(const String& json) {
     if (rawBri > 100) rawBri = rawBri * 100 / 255;  // Migrate from PWM to percentage
     _settings.brightness = constrain(rawBri, 1, 100);
     _settings.denseFontMode    = doc["dense_font"] | false;
-    _settings.keyboardBrightness = constrain(doc["kb_brightness"] | 100, 1, 100);
+    _settings.keyboardBrightness = constrain(doc["kb_brightness"] | 100, 0, 100);
     _settings.keyboardAutoOn     = doc["kb_auto_on"] | false;
     _settings.keyboardAutoOff    = doc["kb_auto_off"] | false;
     _settings.trackballSpeed   = doc["trackball_speed"] | 3;
     _settings.touchSensitivity = doc["touch_sens"] | 3;
-    _settings.bleEnabled       = doc["ble_enabled"] | false;
+    _settings.bleEnabled       = false;
 
     _settings.gpsTimeEnabled     = doc["gps_time"]     | true;
     _settings.gpsLocationEnabled = doc["gps_location"] | false;
@@ -74,7 +91,10 @@ bool UserConfig::parseJson(const String& json) {
     _settings.audioVolume  = doc["audio_vol"] | 80;
 
     _settings.displayName = doc["display_name"] | "";
-    _settings.announceInterval = doc["announce_int"] | 5;
+    _settings.sdStorageEnabled = doc["sd_storage"] | _settings.sdStorageEnabled;
+    _settings.announceInterval = doc["announce_int"] | 30;
+    if (_settings.announceInterval < 30) _settings.announceInterval = 30;
+    if (_settings.announceInterval > 360) _settings.announceInterval = 360;
     _settings.devMode     = doc["dev_mode"]     | false;
 
     Serial.println("[CONFIG] Settings loaded");
@@ -95,8 +115,18 @@ String UserConfig::serializeToJson() const {
     doc["wifi_mode"] = (int)_settings.wifiMode;
     doc["wifi_ap_ssid"] = _settings.wifiAPSSID;
     doc["wifi_ap_pass"] = _settings.wifiAPPassword;
-    doc["wifi_sta_ssid"] = _settings.wifiSTASSID;
-    doc["wifi_sta_pass"] = _settings.wifiSTAPassword;
+    doc["wifi_sta_selected"] = (int)constrain((int)_settings.wifiSTASelected, 0, (int)WIFI_STA_MAX_NETWORKS - 1);
+    JsonArray staArr = doc["wifi_sta_networks"].to<JsonArray>();
+    for (size_t slot = 0; slot < WIFI_STA_MAX_NETWORKS; slot++) {
+        JsonObject obj = staArr.add<JsonObject>();
+        if (slot < _settings.wifiSTANetworks.size()) {
+            obj["ssid"] = _settings.wifiSTANetworks[slot].ssid;
+            obj["pass"] = _settings.wifiSTANetworks[slot].password;
+        } else {
+            obj["ssid"] = "";
+            obj["pass"] = "";
+        }
+    }
 
     doc["autoiface_en"]    = _settings.autoIfaceEnabled;
     doc["autoiface_group"] = _settings.autoIfaceGroupId;
@@ -119,7 +149,7 @@ String UserConfig::serializeToJson() const {
     doc["kb_auto_off"] = _settings.keyboardAutoOff;
     doc["trackball_speed"] = _settings.trackballSpeed;
     doc["touch_sens"] = _settings.touchSensitivity;
-    doc["ble_enabled"] = _settings.bleEnabled;
+    doc["ble_enabled"] = false;
 
     doc["gps_time"]     = _settings.gpsTimeEnabled;
     doc["gps_location"] = _settings.gpsLocationEnabled;
@@ -131,6 +161,7 @@ String UserConfig::serializeToJson() const {
     doc["audio_vol"] = _settings.audioVolume;
 
     doc["display_name"] = _settings.displayName;
+    doc["sd_storage"] = _settings.sdStorageEnabled;
     doc["announce_int"] = _settings.announceInterval;
     doc["dev_mode"]     = _settings.devMode;
 
@@ -156,16 +187,6 @@ bool UserConfig::save(FlashStore& flash) {
 }
 
 bool UserConfig::load(SDStore& sd, FlashStore& flash) {
-    // Try SD card first
-    if (sd.isReady()) {
-        String json = sd.readString(SD_PATH_USER_CONFIG);
-        if (!json.isEmpty()) {
-            Serial.println("[CONFIG] Loading from SD card");
-            return parseJson(json);
-        }
-    }
-
-    // Fall back to flash
     String json = flash.readString(PATH_USER_CONFIG);
     if (json.isEmpty()) {
         Serial.println("[CONFIG] No saved config, using defaults");
@@ -174,14 +195,13 @@ bool UserConfig::load(SDStore& sd, FlashStore& flash) {
 
     bool ok = parseJson(json);
 
-    // Auto-migrate: flash had config but SD didn't — copy to SD
-    if (ok && sd.isReady()) {
-        Serial.println("[CONFIG] Migrating config from flash to SD...");
-        sd.ensureDir("/ratdeck");
-        sd.ensureDir("/ratdeck/config");
-        String migrateJson = serializeToJson();
-        if (sd.writeString(SD_PATH_USER_CONFIG, migrateJson)) {
-            Serial.println("[CONFIG] Migration complete");
+    if (ok && _settings.sdStorageEnabled && sd.isReady()) {
+        String sdJson = sd.readString(SD_PATH_USER_CONFIG);
+        if (!sdJson.isEmpty()) {
+            Serial.println("[CONFIG] Loading opt-in SD config");
+            bool sdOk = parseJson(sdJson);
+            _settings.sdStorageEnabled = true;
+            return sdOk;
         }
     }
 
@@ -192,8 +212,7 @@ bool UserConfig::save(SDStore& sd, FlashStore& flash) {
     String json = serializeToJson();
     bool ok = false;
 
-    // Write to SD (primary)
-    if (sd.isReady()) {
+    if (_settings.sdStorageEnabled && sd.isReady()) {
         sd.ensureDir("/ratdeck");
         sd.ensureDir("/ratdeck/config");
         if (sd.writeString(SD_PATH_USER_CONFIG, json)) {

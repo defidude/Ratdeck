@@ -9,6 +9,7 @@ class InputManager {
 public:
     void begin(Keyboard* kb, Trackball* tb, TouchInput* touch);
     void setPowerMgr(Power* pm) { _powerMgr = pm; }
+    void setTrackballSpeed(uint8_t speed);
     void update();
 
     // Keyboard events
@@ -44,11 +45,12 @@ private:
     static constexpr unsigned long CLICK_DEBOUNCE_MS = 80;
 
     // Trackball navigation state
+    uint8_t _trackballSpeed = 3;
     int8_t _tbAccumX = 0;
     int8_t _tbAccumY = 0;
     unsigned long _lastTbNavTime = 0;
-    static constexpr int8_t TB_NAV_THRESHOLD = 3;
-    static constexpr unsigned long TB_NAV_RATE_MS = 200;
+    int8_t trackballThreshold() const;
+    unsigned long trackballRateMs() const;
 
     // Touch polling throttle
     unsigned long _lastTouchPoll = 0;

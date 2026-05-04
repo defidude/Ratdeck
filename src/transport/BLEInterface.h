@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/Config.h"
+
+#if HAS_BLE
+
 #include <Interface.h>
 #include <NimBLEDevice.h>
 #include <vector>
@@ -57,6 +61,7 @@ private:
     bool _connected = false;
     unsigned long _lastActivityMs = 0;
     static constexpr unsigned long BLE_IDLE_TIMEOUT_MS = 300000;  // 5 minutes
+    static constexpr size_t MAX_INCOMING_FRAMES = 12;
 
     // HDLC rx state
     std::vector<uint8_t> _rxFrame;
@@ -79,3 +84,5 @@ private:
     static constexpr const char* TX_CHAR_UUID = "e2f0a5b2-c3d4-4e56-8f90-1a2b3c4d5e6f";
     static constexpr const char* RX_CHAR_UUID = "e2f0a5b3-c3d4-4e56-8f90-1a2b3c4d5e6f";
 };
+
+#endif

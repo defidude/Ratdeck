@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-// RatDeck — Compile-Time Configuration
+// Ratdeck — Compile-Time Configuration
 // =============================================================================
 
 #define RATDECK_VERSION_MAJOR  1
@@ -16,7 +16,13 @@
 #define HAS_TRACKBALL   true
 #define HAS_LORA        true
 #define HAS_WIFI        true
-#define HAS_BLE         true
+// TODO(BLE): Revisit as a dedicated Ratspeak BLE Peer transport based on the
+// rsReticulum GATT/fragmentation/anti-loop design, after T-Deck Plus memory,
+// flash, power, and interop behavior are tested end to end.
+#ifndef RATDECK_EXPERIMENTAL_BLE
+#define RATDECK_EXPERIMENTAL_BLE 0
+#endif
+#define HAS_BLE         RATDECK_EXPERIMENTAL_BLE
 #define HAS_SD          true
 #define HAS_AUDIO       true
 #define HAS_GPS         true    // UBlox MIA-M10Q UART GPS
@@ -47,7 +53,7 @@
 #define MAX_TCP_CONNECTIONS         4
 #define TCP_DEFAULT_PORT            4242
 #define TCP_RECONNECT_INTERVAL_MS   15000
-#define TCP_CONNECT_TIMEOUT_MS      5000
+#define TCP_CONNECT_TIMEOUT_MS      500
 
 // --- Announce Flood Defense ---
 #define RATDECK_MAX_ANNOUNCES_PER_SEC 5     // Transport-level rate limit (before Ed25519 verify)
@@ -57,6 +63,7 @@
 #define RATDECK_MAX_MESSAGES_PER_CONV 100
 #define FLASH_MSG_CACHE_LIMIT         20
 #define RATDECK_MAX_OUTQUEUE          20
+#define RATDECK_LXMF_SINGLE_FRAME_MAX 254   // T-Deck-safe payload cap until resource transfers are fixed
 #define PATH_PERSIST_INTERVAL_MS  60000
 
 // --- Power Management ---

@@ -1,4 +1,5 @@
 #include "IdentityManager.h"
+#include "config/Config.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <Utilities/OS.h>
@@ -11,28 +12,46 @@ bool IdentityManager::begin(FlashStore* flash, SDStore* sd) {
 
     // If no slots exist, import the current active identity as slot 0
     if (_slots.empty()) {
-        if (_flash->exists("/identity/identity.key")) {
+        if (_flash->exists(PATH_IDENTITY)) {
             IdentitySlot slot;
-            slot.keyPath = "/identity/identity.key";
+            slot.keyPath = slotKeyPath(0);
             slot.active = true;
 
             // Load the key to get its hash
             RNS::Bytes keyData;
-            if (RNS::Utilities::OS::read_file(slot.keyPath.c_str(), keyData) > 0) {
+            if (RNS::Utilities::OS::read_file(PATH_IDENTITY, keyData) > 0) {
                 RNS::Identity id(false);
                 if (id.load_private_key(keyData)) {
                     slot.hash = id.hexhash();
                 }
             }
-            _slots.push_back(slot);
-            _activeIdx = 0;
-            saveSlotMeta();
+            if (!slot.hash.empty()
+                && _flash->writeAtomic(slot.keyPath.c_str(), keyData.data(), keyData.size())) {
+                _slots.push_back(slot);
+                _activeIdx = 0;
+                saveSlotMeta();
+            }
         }
     } else {
-        // Find active slot
+        int activeIdx = -1;
         for (int i = 0; i < (int)_slots.size(); i++) {
-            if (_slots[i].active) { _activeIdx = i; break; }
+            if (_slots[i].keyPath == PATH_IDENTITY) {
+                String migratedPath = slotKeyPath(i);
+                RNS::Bytes keyData;
+                if (RNS::Utilities::OS::read_file(PATH_IDENTITY, keyData) > 0) {
+                    RNS::Identity id(false);
+                    if (id.load_private_key(keyData)
+                        && (_slots[i].hash.empty() || _slots[i].hash == id.hexhash())
+                        && _flash->writeAtomic(migratedPath.c_str(), keyData.data(), keyData.size())) {
+                        _slots[i].keyPath = migratedPath;
+                        if (_slots[i].hash.empty()) _slots[i].hash = id.hexhash();
+                    }
+                }
+            }
+            if (_slots[i].active && activeIdx < 0) activeIdx = i;
         }
+        _activeIdx = activeIdx;
+        saveSlotMeta();
     }
 
     Serial.printf("[IDMGR] %d identities, active=%d\n", (int)_slots.size(), _activeIdx);
@@ -56,8 +75,10 @@ int IdentityManager::createIdentity(const String& displayName) {
     int slotNum = (int)_slots.size();
     String keyPath = slotKeyPath(slotNum);
 
-    // Save key file
-    _flash->writeAtomic(keyPath.c_str(), privKey.data(), privKey.size());
+    if (!_flash->writeAtomic(keyPath.c_str(), privKey.data(), privKey.size())) {
+        Serial.println("[IDMGR] Failed to save new identity key");
+        return -1;
+    }
 
     IdentitySlot slot;
     slot.hash = newId.hexhash();
@@ -105,6 +126,16 @@ bool IdentityManager::switchTo(int index, RNS::Identity& outIdentity) {
         Serial.printf("[IDMGR] Failed to load key for slot %d\n", index);
         return false;
     }
+    if (!_slots[index].hash.empty() && _slots[index].hash != id.hexhash()) {
+        Serial.printf("[IDMGR] Slot %d key hash mismatch; refusing switch\n", index);
+        return false;
+    }
+
+    // Copy the active key to the standard internal identity path for ReticulumManager.
+    if (!_flash->writeAtomic(PATH_IDENTITY, keyData.data(), keyData.size())) {
+        Serial.printf("[IDMGR] Failed to write active identity for slot %d\n", index);
+        return false;
+    }
 
     // Mark old active as inactive
     if (_activeIdx >= 0 && _activeIdx < (int)_slots.size()) {
@@ -113,13 +144,6 @@ bool IdentityManager::switchTo(int index, RNS::Identity& outIdentity) {
 
     _slots[index].active = true;
     _activeIdx = index;
-
-    // Copy the active key to the standard identity path for ReticulumManager
-    _flash->writeAtomic("/identity/identity.key", keyData.data(), keyData.size());
-    if (_sd && _sd->isReady()) {
-        _sd->ensureDir("/ratdeck/identity");
-        _sd->writeAtomic("/ratdeck/identity/identity.key", keyData.data(), keyData.size());
-    }
 
     outIdentity = id;
     saveSlotMeta();

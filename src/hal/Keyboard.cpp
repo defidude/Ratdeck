@@ -1,4 +1,5 @@
 #include "Keyboard.h"
+#include <ctype.h>
 
 Keyboard* Keyboard::_instance = nullptr;
 int Keyboard::_debugCount = 0;
@@ -25,11 +26,11 @@ bool Keyboard::begin() {
 
 uint8_t Keyboard::readKey(uint8_t* modOut) {
     *modOut = 0;
-    // Read 2 bytes: byte 1 = key, byte 2 = potential modifier flags
-    Wire.requestFrom((uint8_t)KB_I2C_ADDR, (uint8_t)2);
+    // The stock LilyGO keyboard firmware returns one translated key byte.
+    // Requesting extra bytes can read undefined data and create phantom modifiers.
+    Wire.requestFrom((uint8_t)KB_I2C_ADDR, (uint8_t)1);
     uint8_t key = 0;
     if (Wire.available()) key = Wire.read();
-    if (Wire.available()) *modOut = Wire.read();
     return key;
 }
 
@@ -54,8 +55,11 @@ void Keyboard::update() {
     _event = {};
 
     // Check for Alt in modifier byte (try common bit positions)
+    // Optional custom keyboard firmwares may expose modifier bits, but the
+    // default T-Deck path above intentionally reads only the translated key.
     // BBQ-style keyboards: bit 1=Alt, bit 2=Sym, bit 0=Ctrl
     // Also try bit 3, bit 4 as some firmwares use those
+    bool ctrlFromMod = (mod & 0x01);
     bool altFromMod = (mod & 0x02) || (mod & 0x08);
 
     // Track Alt state: if the keyboard sends Alt as a standalone keypress,
@@ -63,6 +67,9 @@ void Keyboard::update() {
     // 0x1B = Esc (unlikely to be Alt), but some controllers use high bytes
     // The T-Deck Alt key might send no byte at all when pressed alone.
 
+    if (ctrlFromMod) {
+        _event.ctrl = true;
+    }
     if (altFromMod) {
         _event.alt = true;
     }
@@ -81,19 +88,19 @@ void Keyboard::update() {
     } else if (key == ' ') {
         _event.space = true;
         _event.character = ' ';
-    } else if (key >= 0x01 && key <= 0x1A) {
-        // Ctrl+A through Ctrl+Z
-        _event.ctrl = true;
-        _event.character = key + 'a' - 1;
     } else if (key >= 0x20 && key <= 0x7E) {
-        _event.character = key;
+        _event.character = ctrlFromMod ? (char)tolower(key) : key;
     }
 
     _hasEvent = true;
 }
 
 bool Keyboard::setBacklightBrightness(uint8_t percent) {
-    percent = constrain(percent, 1, 100);
+    percent = constrain(percent, 0, 100);
+    if (percent == 0) {
+        _backlightBrightness = 0;
+        return true;
+    }
     // [1, 100] % -> [31, 255] PWM
     constexpr uint16_t SCALE = 255 - 31;
     constexpr uint16_t DIV   = 100 - 1;

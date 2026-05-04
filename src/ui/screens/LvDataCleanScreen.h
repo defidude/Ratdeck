@@ -16,11 +16,15 @@ public:
     void showStatus(const char* msg);
 
 private:
+    lv_obj_t* _yesBox = nullptr;
+    lv_obj_t* _noBox = nullptr;
     lv_obj_t* _yesLabel = nullptr;
     lv_obj_t* _noLabel = nullptr;
     lv_obj_t* _hintLabel = nullptr;
+    lv_obj_t* _confirmLabel = nullptr;
     lv_obj_t* _statusLabel = nullptr;
-    bool _selectedYes = true;
+    bool _selectedYes = false;
+    bool _confirmWipe = false;
     std::function<void(bool)> _doneCb;
     void updateSelection();
 };

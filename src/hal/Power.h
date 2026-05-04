@@ -38,7 +38,7 @@ public:
         }
     }
 
-    // Keyboard backlight — accepts percentage 1-100
+    // Keyboard backlight — accepts percentage 0-100 (0 = off)
     void setKbBrightness(uint8_t percent, bool apply=false);
     void setKbAutoOn(bool enable) { _kbAutoOn = enable; }
     void setKbAutoOff(bool enable) { _kbAutoOff = enable; }

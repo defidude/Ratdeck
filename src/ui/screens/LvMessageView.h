@@ -19,6 +19,7 @@ public:
     void onEnter() override;
     void onExit() override;
     bool handleKey(const KeyEvent& event) override;
+    bool handleLongPress() override;
 
     void setPeerHex(const std::string& hex) { _peerHex = hex; }
     void setLXMFManager(LXMFManager* lxmf) { _lxmf = lxmf; }
@@ -29,10 +30,17 @@ public:
     const char* title() const override { return "Chat"; }
 
 private:
-    void sendCurrentMessage();
+    void sendCurrentMessage(bool viaLink = false);
     void rebuildMessages();
     void appendMessage(const LXMFMessage& msg);
     std::string getPeerName();
+    void updateHeader();
+    void updateComposerState();
+    void refreshComposerPlaceholder();
+    void showSendModeMenu();
+    void hideSendModeMenu();
+    void updateSendModeMenu();
+    void chooseSendMode(int idx);
 
     LXMFManager* _lxmf = nullptr;
     AnnounceManager* _am = nullptr;
@@ -50,14 +58,23 @@ private:
     // LVGL widgets
     lv_obj_t* _header = nullptr;
     lv_obj_t* _lblHeader = nullptr;
+    lv_obj_t* _lblHeaderMeta = nullptr;
+    lv_obj_t* _lblHeaderState = nullptr;
     lv_obj_t* _msgScroll = nullptr;
     lv_obj_t* _inputRow = nullptr;
     lv_obj_t* _textarea = nullptr;
     lv_obj_t* _btnSend = nullptr;
+    lv_obj_t* _sendOverlay = nullptr;
+    lv_obj_t* _sendRows[3] = {};
+    lv_obj_t* _sendLabels[3] = {};
+    int _sendMenuIdx = 0;
+    bool _suppressNextSendClick = false;
 
     // Per-message status labels for partial updates (avoids full rebuild)
     std::vector<lv_obj_t*> _statusLabels;
     std::vector<lv_obj_t*> _textLabels;
+    std::vector<lv_obj_t*> _bubbleBoxes;
 
     static constexpr unsigned long REFRESH_INTERVAL_MS = 2000;  // Check for new messages every 2s
+    static constexpr size_t MAX_COMPOSER_CHARS = 120;
 };

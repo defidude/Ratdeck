@@ -175,7 +175,7 @@ std::list<std::string> LittleFSFileSystem::list_directory(const char* p, Callbac
 size_t LittleFSFileSystem::storage_size() { return LittleFS.totalBytes(); }
 size_t LittleFSFileSystem::storage_available() { return LittleFS.totalBytes() - LittleFS.usedBytes(); }
 
-bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
+bool ReticulumManager::begin(SX1262* radio, FlashStore* flash, bool loraEnabled) {
     _flash = flash;
 
     LittleFSFileSystem* fsImpl = new LittleFSFileSystem();
@@ -207,12 +207,16 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
         }
     }
 
-    _loraImpl = new LoRaInterface(radio, "LoRa.915");
-    _loraIface = _loraImpl;
-    _loraIface.mode(RNS::Type::Interface::MODE_GATEWAY);
-    RNS::Transport::register_interface(_loraIface);
-    if (!_loraImpl->start()) {
-        Serial.println("[RNS] WARNING: LoRa interface failed to start");
+    if (loraEnabled) {
+        _loraImpl = new LoRaInterface(radio, "LoRa.915");
+        _loraIface = _loraImpl;
+        _loraIface.mode(RNS::Type::Interface::MODE_GATEWAY);
+        RNS::Transport::register_interface(_loraIface);
+        if (!_loraImpl->start()) {
+            Serial.println("[RNS] WARNING: LoRa interface failed to start");
+        }
+    } else {
+        Serial.println("[RNS] LoRa interface disabled by config");
     }
 
     _reticulum = RNS::Reticulum();

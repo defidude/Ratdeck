@@ -28,6 +28,11 @@ public:
     void setTCPClients(std::vector<TCPClientInterface*>* clients) { _tcpClients = clients; }
     void setAnnounceCallback(std::function<void()> cb) { _announceCb = cb; }
     void setAudioToggleCallback(std::function<void()> cb) { _audioToggleCb = cb; }
+    void setLoraToggleCallback(std::function<void()> cb) { _loraToggleCb = cb; }
+    void setTCPToggleCallback(std::function<void()> cb) { _tcpToggleCb = cb; }
+    void setWiFiToggleCallback(std::function<void()> cb) { _wifiToggleCb = cb; }
+    void setGPSToggleCallback(std::function<void()> cb) { _gpsToggleCb = cb; }
+    void setPeersCallback(std::function<void()> cb) { _peersCb = cb; }
 
     const char* title() const override { return "Home"; }
 
@@ -41,6 +46,11 @@ private:
     bool _radioOnline = false;
     std::function<void()> _announceCb;
     std::function<void()> _audioToggleCb;
+    std::function<void()> _loraToggleCb;
+    std::function<void()> _tcpToggleCb;
+    std::function<void()> _wifiToggleCb;
+    std::function<void()> _gpsToggleCb;
+    std::function<void()> _peersCb;
     unsigned long _lastRefreshMs = 0;
     unsigned long _lastUptime = 0;
     uint32_t _lastHeap = 0;
@@ -74,5 +84,11 @@ private:
     lv_obj_t* _lblAnnounceAction = nullptr;
 
     void toggleAudio();
+    void toggleLora();
+    void toggleTcp();
+    void toggleWiFi();
+    void toggleGPS();
+    void openPeers();
+    void forceRefresh();
     void renderAvatar(const String& seed);
 };

@@ -18,6 +18,7 @@ bool UserConfig::parseJson(const String& json) {
     _settings.loraCR        = doc["lora_cr"]   | (int)LORA_DEFAULT_CR;
     _settings.loraTxPower   = doc["lora_txp"]  | (int)LORA_DEFAULT_TX_POWER;
     _settings.loraPreamble  = doc["lora_pre"]  | (long)LORA_DEFAULT_PREAMBLE;
+    _settings.loraEnabled   = doc["lora_on"]   | true;
 
     // WiFi mode — migrate from legacy wifi_enabled bool
     int mode = doc["wifi_mode"] | -1;
@@ -26,6 +27,9 @@ bool UserConfig::parseJson(const String& json) {
     } else {
         _settings.wifiMode = (doc["wifi_enabled"] | true) ? RAT_WIFI_AP : RAT_WIFI_OFF;
     }
+    int restoreMode = doc["wifi_restore_mode"] | (int)(_settings.wifiMode == RAT_WIFI_OFF ? RAT_WIFI_STA : _settings.wifiMode);
+    _settings.wifiRestoreMode = (RatWiFiMode)constrain(restoreMode, 1, 2);
+    if (_settings.wifiMode != RAT_WIFI_OFF) _settings.wifiRestoreMode = _settings.wifiMode;
     _settings.wifiAPSSID     = doc["wifi_ap_ssid"]     | "";
     _settings.wifiAPPassword = doc["wifi_ap_pass"]     | WIFI_AP_PASSWORD;
     _settings.wifiSTASelected = constrain((int)(doc["wifi_sta_selected"] | 0), 0, (int)WIFI_STA_MAX_NETWORKS - 1);
@@ -111,8 +115,10 @@ String UserConfig::serializeToJson() const {
     doc["lora_cr"]   = _settings.loraCR;
     doc["lora_txp"]  = _settings.loraTxPower;
     doc["lora_pre"]  = _settings.loraPreamble;
+    doc["lora_on"]   = _settings.loraEnabled;
 
     doc["wifi_mode"] = (int)_settings.wifiMode;
+    doc["wifi_restore_mode"] = (int)_settings.wifiRestoreMode;
     doc["wifi_ap_ssid"] = _settings.wifiAPSSID;
     doc["wifi_ap_pass"] = _settings.wifiAPPassword;
     doc["wifi_sta_selected"] = (int)constrain((int)_settings.wifiSTASelected, 0, (int)WIFI_STA_MAX_NETWORKS - 1);

@@ -643,7 +643,7 @@ void setup() {
     lvBootScreen.setProgress(0.65f, "Starting Reticulum...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
     rns.setSDStore(&sdStore);
-    if (rns.begin(&radio, &flash)) {
+    if (rns.begin(&radio, &flash, userConfig.settings().loraEnabled)) {
         Serial.printf("[BOOT] Identity: %s\n", rns.identityHash().c_str());
         lvBootScreen.setProgress(0.72f, "Reticulum active");
     } else {
@@ -720,7 +720,7 @@ void setup() {
     // (LVGL boot renders via lv_timer_handler in setProgress)
 
     // Step 21: Apply radio config
-    if (radioOnline) {
+    if (radioOnline && userConfig.settings().loraEnabled) {
         auto& s = userConfig.settings();
         radio.setFrequency(s.loraFrequency);
         radio.setSpreadingFactor(s.loraSF);
@@ -732,6 +732,11 @@ void setup() {
         Serial.printf("[BOOT] Radio: %lu Hz, SF%d, BW%lu, CR4/%d, %d dBm, pre=%ld\n",
                       (unsigned long)s.loraFrequency, s.loraSF,
                       (unsigned long)s.loraBW, s.loraCR, s.loraTxPower, s.loraPreamble);
+        ui.lvStatusBar().setLoRaOnline(true);
+    } else if (radioOnline) {
+        radio.sleep();
+        ui.lvStatusBar().setLoRaOnline(false);
+        Serial.println("[BOOT] LoRa disabled by config");
     }
     lvBootScreen.setProgress(0.84f, "Radio configured");
     // (LVGL boot renders via lv_timer_handler in setProgress)
@@ -893,6 +898,107 @@ void setup() {
         Serial.printf("[AUDIO] Notifications %s (save %s)\n",
                       userConfig.settings().audioEnabled ? "ON" : "OFF",
                       ok ? "OK" : "FAILED");
+    });
+    lvHomeScreen.setLoraToggleCallback([]() {
+        auto& s = userConfig.settings();
+        s.loraEnabled = !s.loraEnabled;
+        bool ok = userConfig.save(sdStore, flash);
+        ui.lvStatusBar().showToast(
+            ok ? "LoRa saved; reboot to apply" : "Save failed",
+            ok ? 3000 : 2000);
+        Serial.printf("[LORA] Saved %s (save %s, reboot required)\n",
+                      s.loraEnabled ? "ON" : "OFF",
+                      ok ? "OK" : "FAILED");
+    });
+    lvHomeScreen.setTCPToggleCallback([]() {
+        auto& s = userConfig.settings();
+        bool enabled = false;
+        bool hasSavedRelay = false;
+        for (const auto& ep : s.tcpConnections) {
+            if (!ep.host.isEmpty()) hasSavedRelay = true;
+            if (!ep.host.isEmpty() && ep.autoConnect) { enabled = true; break; }
+        }
+        if (enabled) {
+            for (auto& ep : s.tcpConnections) ep.autoConnect = false;
+        } else if (hasSavedRelay) {
+            for (auto& ep : s.tcpConnections) {
+                if (!ep.host.isEmpty()) ep.autoConnect = true;
+            }
+        } else {
+            s.tcpConnections.clear();
+            TCPEndpoint ep;
+            ep.host = "rns.ratspeak.org";
+            ep.port = TCP_DEFAULT_PORT;
+            ep.autoConnect = true;
+            s.tcpConnections.push_back(ep);
+        }
+        bool ok = userConfig.save(sdStore, flash);
+        ui.lvStatusBar().showToast(
+            ok ? "TCP relay saved; reboot to apply" : "Save failed",
+            ok ? 3000 : 2000);
+        Serial.printf("[TCP] Saved relay %s (save %s, reboot required)\n",
+                      enabled ? "OFF" : "ON",
+                      ok ? "OK" : "FAILED");
+    });
+    lvHomeScreen.setWiFiToggleCallback([]() {
+        auto& s = userConfig.settings();
+        if (s.wifiMode == RAT_WIFI_OFF) {
+            RatWiFiMode restoreMode = s.wifiRestoreMode == RAT_WIFI_OFF ? RAT_WIFI_STA : s.wifiRestoreMode;
+            if (restoreMode == RAT_WIFI_STA) {
+                size_t slot = s.wifiSTASelected < s.wifiSTANetworks.size() ? s.wifiSTASelected : 0;
+                if (slot >= s.wifiSTANetworks.size() || s.wifiSTANetworks[slot].ssid.isEmpty()) {
+                    ui.lvStatusBar().showToast("Add WiFi in Settings", 2000);
+                    return;
+                }
+            } else if (restoreMode != RAT_WIFI_AP) {
+                ui.lvStatusBar().showToast("Add WiFi in Settings", 2000);
+                return;
+            }
+            s.wifiMode = restoreMode;
+        } else {
+            s.wifiRestoreMode = s.wifiMode;
+            s.wifiMode = RAT_WIFI_OFF;
+        }
+        bool ok = userConfig.save(sdStore, flash);
+        ui.lvStatusBar().showToast(
+            ok ? "WiFi saved; reboot to apply" : "Save failed",
+            ok ? 3000 : 2000);
+        Serial.printf("[WIFI] Saved mode %d (save %s, reboot required)\n",
+                      (int)s.wifiMode, ok ? "OK" : "FAILED");
+    });
+#if HAS_GPS
+    lvHomeScreen.setGPSToggleCallback([]() {
+        auto& s = userConfig.settings();
+        bool oldTime = s.gpsTimeEnabled;
+        s.gpsTimeEnabled = !s.gpsTimeEnabled;
+        bool ok = userConfig.save(sdStore, flash);
+        if (!ok) {
+            s.gpsTimeEnabled = oldTime;
+            ui.lvStatusBar().showToast("Save failed", 2000);
+            Serial.println("[GPS] Toggle save failed");
+            return;
+        }
+        if (s.gpsTimeEnabled) {
+            gps.setPosixTZ(currentPosixTZ());
+            gps.setLocationEnabled(s.gpsLocationEnabled);
+            gps.begin();
+            ui.lvStatusBar().showToast("GPS ON", 1000);
+            Serial.println("[GPS] Enabled via Home");
+        } else {
+            gps.stop();
+            ui.lvStatusBar().setGPSFix(false);
+            ui.lvStatusBar().showToast("GPS OFF", 1000);
+            Serial.println("[GPS] Disabled via Home");
+        }
+    });
+#else
+    lvHomeScreen.setGPSToggleCallback([]() {
+        ui.lvStatusBar().showToast("GPS unavailable", 1500);
+    });
+#endif
+    lvHomeScreen.setPeersCallback([]() {
+        ui.lvTabBar().setActiveTab(LvTabBar::TAB_NODES);
+        ui.setScreen(&lvNodesScreen);
     });
 
     lvContactsScreen.setAnnounceManager(announceManager);

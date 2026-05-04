@@ -37,6 +37,7 @@ private:
     void updateHeader();
     void updateComposerState();
     void refreshComposerPlaceholder();
+    void updateComposerText();
     void showSendModeMenu();
     void hideSendModeMenu();
     void updateSendModeMenu();

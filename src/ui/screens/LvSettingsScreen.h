@@ -191,9 +191,11 @@ private:
         uint8_t wifiSTASelected;
         bool autoIfaceEnabled;
         bool sdStorageEnabled;
+        bool loraEnabled;
     };
     RebootSnapshot _rebootSnap;
     void snapshotRebootSettings();
+    bool loraSettingsChanged() const;
     bool interfaceSettingsChanged() const;
     bool storageSettingsChanged() const;
     bool rebootSettingsChanged() const;
@@ -201,6 +203,7 @@ private:
     // TCP change detection
     String _tcpSnapHost;
     uint16_t _tcpSnapPort = 0;
+    bool _tcpSnapAuto = false;
     void snapshotTCPSettings();
     bool tcpSettingsChanged() const;
 

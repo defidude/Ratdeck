@@ -66,11 +66,6 @@ int textWidthForBubble(const std::string& content) {
     return width;
 }
 
-std::string shortHex(const std::string& peerHex) {
-    if (peerHex.size() <= 12) return peerHex;
-    return peerHex.substr(0, 6) + ".." + peerHex.substr(peerHex.size() - 4);
-}
-
 void makeTransparent(lv_obj_t* obj) {
     lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(obj, 0, 0);
@@ -96,31 +91,17 @@ void LvMessageView::updateHeader() {
     lv_label_set_text(_lblHeader, name.c_str());
 
     const DiscoveredNode* node = _am ? _am->findNodeByHex(_peerHex) : nullptr;
-    const char* identity = "unknown";
     const char* state = "UNKNOWN";
     uint32_t stateColor = Theme::TEXT_MUTED;
-    char meta[72];
 
     if (node) {
         bool fresh = node->lastSeen != 0 && (millis() - node->lastSeen) <= kFreshNodeMs;
-        identity = node->saved ? "friend" : "heard";
         state = fresh ? "ONLINE" : (node->saved ? "FRIEND" : "STALE");
         stateColor = fresh ? Theme::SUCCESS : (node->saved ? Theme::PRIMARY : Theme::TEXT_SECONDARY);
-        if (node->rssi != 0 || node->snr != 0.0f) {
-            snprintf(meta, sizeof(meta), "%s | %s | %ddBm %.1fdB %uH",
-                     identity, shortHex(_peerHex).c_str(), node->rssi, node->snr, (unsigned)node->hops);
-        } else if (node->hops > 0) {
-            snprintf(meta, sizeof(meta), "%s | %s | %uH",
-                     identity, shortHex(_peerHex).c_str(), (unsigned)node->hops);
-        } else {
-            snprintf(meta, sizeof(meta), "%s | %s", identity, shortHex(_peerHex).c_str());
-        }
-    } else {
-        snprintf(meta, sizeof(meta), "%s | %s", identity, shortHex(_peerHex).c_str());
     }
 
     if (_lblHeaderMeta) {
-        lv_label_set_text(_lblHeaderMeta, meta);
+        lv_label_set_text(_lblHeaderMeta, _peerHex.c_str());
     }
     if (_lblHeaderState) {
         lv_label_set_text(_lblHeaderState, state);
@@ -144,6 +125,23 @@ void LvMessageView::refreshComposerPlaceholder() {
     bool focused = lv_obj_has_state(_textarea, LV_STATE_FOCUSED);
     lv_textarea_set_placeholder_text(_textarea,
         (_inputText.empty() && !focused) ? kComposerPlaceholder : "");
+    updateComposerText();
+}
+
+void LvMessageView::updateComposerText() {
+    if (!_textarea) return;
+
+    bool focused = lv_obj_has_state(_textarea, LV_STATE_FOCUSED);
+    bool showCaret = focused || !_inputText.empty();
+    if (!showCaret) {
+        lv_textarea_set_text(_textarea, "");
+        return;
+    }
+
+    std::string display = _inputText;
+    display += "_";
+    lv_textarea_set_text(_textarea, display.c_str());
+    lv_textarea_set_cursor_pos(_textarea, LV_TEXTAREA_CURSOR_LAST);
 }
 
 void LvMessageView::createUI(lv_obj_t* parent) {
@@ -188,7 +186,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_set_style_text_font(_lblHeaderMeta, &lv_font_ratdeck_10, 0);
     lv_obj_set_style_text_color(_lblHeaderMeta, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     lv_label_set_long_mode(_lblHeaderMeta, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(_lblHeaderMeta, 214);
+    lv_obj_set_width(_lblHeaderMeta, Theme::CONTENT_W - 30);
     lv_obj_set_pos(_lblHeaderMeta, 22, 21);
 
     _lblHeaderState = lv_label_create(_header);
@@ -234,7 +232,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_set_size(_textarea, Theme::CONTENT_W - kComposerButtonW - 12, 23);
     lv_obj_align(_textarea, LV_ALIGN_LEFT_MID, 0, 0);
     lv_textarea_set_one_line(_textarea, true);
-    lv_textarea_set_max_length(_textarea, MAX_COMPOSER_CHARS);
+    lv_textarea_set_max_length(_textarea, MAX_COMPOSER_CHARS + 1);
     lv_textarea_set_placeholder_text(_textarea, kComposerPlaceholder);
     lv_obj_add_style(_textarea, LvTheme::styleTextarea(), 0);
     lv_obj_add_style(_textarea, LvTheme::styleTextareaFocused(), LV_STATE_FOCUSED);
@@ -245,7 +243,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
         auto* self = (LvMessageView*)lv_event_get_user_data(e);
         lv_event_code_t code = lv_event_get_code(e);
         if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED || code == LV_EVENT_PRESSED) {
-            lv_textarea_set_placeholder_text(self->_textarea, "");
+            self->refreshComposerPlaceholder();
         } else if (code == LV_EVENT_DEFOCUSED) {
             self->refreshComposerPlaceholder();
         }
@@ -326,8 +324,7 @@ void LvMessageView::onEnter() {
     hideSendModeMenu();
 
     if (_textarea) {
-        lv_textarea_set_text(_textarea, "");
-        refreshComposerPlaceholder();
+        updateComposerText();
     }
     updateHeader();
     updateComposerState();
@@ -629,7 +626,6 @@ void LvMessageView::sendCurrentMessage(bool viaLink) {
     if (viaLink && _ui) _ui->lvStatusBar().showToast("Link send queued", 1200);
 
     _inputText.clear();
-    if (_textarea) lv_textarea_set_text(_textarea, "");
     updateComposerState();
     _cachedMsgs.clear();  // Force fresh load in rebuildMessages
     rebuildMessages();
@@ -666,7 +662,6 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
     if (event.del || event.character == 0x08) {
         if (!_inputText.empty()) {
             _inputText.pop_back();
-            if (_textarea) lv_textarea_set_text(_textarea, _inputText.c_str());
             updateComposerState();
         } else {
             if (_onBack) _onBack();
@@ -703,7 +698,6 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
             return true;
         }
         _inputText += (char)event.character;
-        if (_textarea) lv_textarea_set_text(_textarea, _inputText.c_str());
         updateComposerState();
         return true;
     }

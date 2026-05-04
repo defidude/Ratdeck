@@ -246,6 +246,7 @@ void LvMessagesScreen::rebuildList() {
 
     for (int i = 0; i < count; i++) {
         const auto& ci = _sortedConvs[i];
+        bool latestOutgoingFailed = ci.hasOutgoing && ci.lastOutgoingStatus == LXMFStatus::FAILED;
 
         lv_obj_t* row = lv_obj_create(_list);
         lv_obj_set_size(row, Theme::CONTENT_W, kRowH);
@@ -280,7 +281,7 @@ void LvMessagesScreen::rebuildList() {
         }, LV_EVENT_FOCUSED, nullptr);
 
         uint32_t railColor = Theme::BORDER;
-        if (ci.hasFailed) railColor = Theme::ERROR_CLR;
+        if (latestOutgoingFailed) railColor = Theme::ERROR_CLR;
         else if (ci.hasPending) railColor = Theme::WARNING_CLR;
         else if (ci.hasUnread) railColor = Theme::PRIMARY;
         else if (ci.savedNode) railColor = Theme::TEXT_SECONDARY;
@@ -328,7 +329,7 @@ void LvMessagesScreen::rebuildList() {
         lv_obj_t* prevLbl = lv_label_create(row);
         lv_obj_set_style_text_font(prevLbl, smallFont, 0);
         uint32_t previewColor = Theme::TEXT_SECONDARY;
-        if (ci.hasFailed) previewColor = Theme::ERROR_CLR;
+        if (latestOutgoingFailed) previewColor = Theme::ERROR_CLR;
         else if (ci.hasPending) previewColor = Theme::WARNING_CLR;
         else if (ci.hasUnread) previewColor = Theme::TEXT_PRIMARY;
         lv_obj_set_style_text_color(prevLbl, lv_color_hex(previewColor), 0);
@@ -339,7 +340,7 @@ void LvMessagesScreen::rebuildList() {
 
         char chipBuf[16] = {0};
         uint32_t chipColor = Theme::TEXT_MUTED;
-        if (ci.hasFailed) {
+        if (latestOutgoingFailed) {
             snprintf(chipBuf, sizeof(chipBuf), "FAILED");
             chipColor = Theme::ERROR_CLR;
         } else if (ci.hasPending) {

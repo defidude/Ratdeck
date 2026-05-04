@@ -114,6 +114,20 @@ void setChipState(lv_obj_t* chip, lv_obj_t* label, const char* text, bool active
     }
 }
 
+void makeClickable(lv_obj_t* obj, void (*cb)(lv_event_t*), void* userData) {
+    if (!obj) return;
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_group_add_obj(LvInput::group(), obj);
+    lv_obj_add_event_cb(obj, cb, LV_EVENT_CLICKED, userData);
+}
+
+bool tcpConfigured(const UserSettings& settings) {
+    for (const auto& ep : settings.tcpConnections) {
+        if (!ep.host.isEmpty() && ep.autoConnect) return true;
+    }
+    return false;
+}
+
 void formatAge(unsigned long elapsedMs, char* out, size_t len) {
     unsigned long sec = elapsedMs / 1000;
     if (sec < 60) {
@@ -178,19 +192,37 @@ void LvHomeScreen::createUI(lv_obj_t* parent) {
                              "ID ----", LV_TEXT_ALIGN_RIGHT);
 
     _chipLora = makeChip(parent, kPad, "LORA", &_lblLoraState);
+    makeClickable(_chipLora, [](lv_event_t* e) {
+        auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
+        self->toggleLora();
+    }, this);
     _chipTcp = makeChip(parent, kPad + kCellW + kGap, "TCP", &_lblTcpState);
+    makeClickable(_chipTcp, [](lv_event_t* e) {
+        auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
+        self->toggleTcp();
+    }, this);
     _chipWifi = makeChip(parent, kPad + (kCellW + kGap) * 2, "WIFI", &_lblWifiState);
+    makeClickable(_chipWifi, [](lv_event_t* e) {
+        auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
+        self->toggleWiFi();
+    }, this);
 
     _statNodes = makeStat(parent, kPad, "PEERS", &_lblNodes);
+    makeClickable(_statNodes, [](lv_event_t* e) {
+        auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
+        self->openPeers();
+    }, this);
     _statPaths = makeStat(parent, kPad + kCellW + kGap, "AUDIO", &_lblPaths);
-    lv_obj_add_flag(_statPaths, LV_OBJ_FLAG_CLICKABLE);
-    lv_group_add_obj(LvInput::group(), _statPaths);
-    lv_obj_add_event_cb(_statPaths, [](lv_event_t* e) {
+    makeClickable(_statPaths, [](lv_event_t* e) {
         auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
         self->toggleAudio();
-    }, LV_EVENT_CLICKED, this);
+    }, this);
 
     _statLinks = makeStat(parent, kPad + (kCellW + kGap) * 2, "GPS", &_lblLinks);
+    makeClickable(_statLinks, [](lv_event_t* e) {
+        auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
+        self->toggleGPS();
+    }, this);
 
     lv_obj_t* footer = makePanel(parent, kPad, kFooterY, 198, kFooterH,
                                  Theme::BG_ELEVATED, Theme::BORDER);
@@ -280,23 +312,31 @@ void LvHomeScreen::refreshUI() {
     }
     renderAvatar(avatarSeed);
 
-    bool loraUp = _radioOnline && _radio && _radio->isRadioOnline();
+    auto* loraIf = _rns ? _rns->loraInterface() : nullptr;
+    bool loraRuntimeUp = _radioOnline && _radio && _radio->isRadioOnline()
+        && loraIf && loraIf->isOnline();
+    bool loraEnabled = _cfg ? _cfg->settings().loraEnabled : loraRuntimeUp;
     bool tcpUp = false;
-    int tcpConfigured = 0;
+    int tcpClientCount = 0;
     if (_tcpClients) {
         for (auto* tcp : *_tcpClients) {
-            if (tcp) tcpConfigured++;
+            if (tcp) tcpClientCount++;
             if (tcp && tcp->isConnected()) { tcpUp = true; break; }
         }
     }
     bool wifiUp = WiFi.status() == WL_CONNECTED;
+    bool wifiEnabled = _cfg ? _cfg->settings().wifiMode != RAT_WIFI_OFF : wifiUp;
+    bool wifiRuntimeActive = wifiUp || (_cfg && _cfg->settings().wifiMode == RAT_WIFI_AP);
+    bool tcpEnabled = _cfg ? tcpConfigured(_cfg->settings()) : tcpClientCount > 0;
     bool transportActive = _rns && _rns->isTransportActive();
-    bool reachable = loraUp || tcpUp;
+    bool reachable = loraRuntimeUp || tcpUp;
 
-    setChipState(_chipLora, _lblLoraState, loraUp ? "ON" : "OFF", loraUp);
-    setChipState(_chipTcp, _lblTcpState, tcpUp ? "ON" : "OFF",
-                 tcpUp, tcpConfigured > 0 && wifiUp);
-    setChipState(_chipWifi, _lblWifiState, wifiUp ? "ON" : "OFF", wifiUp);
+    setChipState(_chipLora, _lblLoraState, loraEnabled ? "ON" : "OFF",
+                 loraEnabled && loraRuntimeUp, loraEnabled != loraRuntimeUp);
+    setChipState(_chipTcp, _lblTcpState, tcpEnabled ? "ON" : "OFF",
+                 tcpUp, tcpEnabled && !tcpUp);
+    setChipState(_chipWifi, _lblWifiState, wifiEnabled ? "ON" : "OFF",
+                 wifiRuntimeActive, wifiEnabled && !wifiRuntimeActive);
 
     if (reachable) {
         lv_label_set_text(_lblStatus, "ONLINE");
@@ -330,7 +370,7 @@ void LvHomeScreen::refreshUI() {
                  audioOn ? Theme::PRIMARY : Theme::BORDER);
 
 #if HAS_GPS
-    bool gpsOn = _cfg && (_cfg->settings().gpsTimeEnabled || _cfg->settings().gpsLocationEnabled);
+    bool gpsOn = _cfg && _cfg->settings().gpsTimeEnabled;
 #else
     bool gpsOn = false;
 #endif
@@ -376,6 +416,26 @@ bool LvHomeScreen::handleKey(const KeyEvent& event) {
             toggleAudio();
             return true;
         }
+        if (focused == _chipLora) {
+            toggleLora();
+            return true;
+        }
+        if (focused == _chipTcp) {
+            toggleTcp();
+            return true;
+        }
+        if (focused == _chipWifi) {
+            toggleWiFi();
+            return true;
+        }
+        if (focused == _statLinks) {
+            toggleGPS();
+            return true;
+        }
+        if (focused == _statNodes) {
+            openPeers();
+            return true;
+        }
         if (_announceCb) _announceCb();
         return true;
     }
@@ -384,8 +444,37 @@ bool LvHomeScreen::handleKey(const KeyEvent& event) {
 
 void LvHomeScreen::toggleAudio() {
     if (_audioToggleCb) _audioToggleCb();
+    forceRefresh();
+}
+
+void LvHomeScreen::toggleLora() {
+    if (_loraToggleCb) _loraToggleCb();
+    forceRefresh();
+}
+
+void LvHomeScreen::toggleTcp() {
+    if (_tcpToggleCb) _tcpToggleCb();
+    forceRefresh();
+}
+
+void LvHomeScreen::toggleWiFi() {
+    if (_wifiToggleCb) _wifiToggleCb();
+    forceRefresh();
+}
+
+void LvHomeScreen::toggleGPS() {
+    if (_gpsToggleCb) _gpsToggleCb();
+    forceRefresh();
+}
+
+void LvHomeScreen::openPeers() {
+    if (_peersCb) _peersCb();
+}
+
+void LvHomeScreen::forceRefresh() {
     _lastRefreshMs = 0;
     _lastUptime = ULONG_MAX;
+    _lastHeap = UINT32_MAX;
     refreshUI();
 }
 

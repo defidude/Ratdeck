@@ -175,6 +175,7 @@ bool LvSettingsScreen::settingNeedsReboot(const SettingItem& item) const {
     if (!_cfg) return false;
     const auto& s = _cfg->settings();
     if (labelEq(item.label, "WiFi Mode")) return s.wifiMode != _rebootSnap.wifiMode;
+    if (labelEq(item.label, "LoRa Radio")) return loraSettingsChanged();
     if (labelEq(item.label, "Active WiFi")) return s.wifiSTASelected != _rebootSnap.wifiSTASelected;
     if (isWiFiSSIDLabel(item.label) || isWiFiPasswordLabel(item.label)) return interfaceSettingsChanged();
     if (labelEq(item.label, "WiFi Scan") || labelEq(item.label, "Forget WiFi")) return interfaceSettingsChanged();
@@ -187,6 +188,9 @@ bool LvSettingsScreen::settingNeedsReboot(const SettingItem& item) const {
 
 bool LvSettingsScreen::categoryNeedsReboot(int catIdx) const {
     if (catIdx < 0 || catIdx >= (int)_categories.size()) return false;
+    if (labelEq(_categories[catIdx].name, "LoRa")) {
+        return loraSettingsChanged();
+    }
     if (labelEq(_categories[catIdx].name, "Interfaces")) {
         return interfaceSettingsChanged() || tcpSettingsChanged();
     }
@@ -512,6 +516,11 @@ void LvSettingsScreen::buildItems() {
 
     // LoRa link
     int radioStart = idx;
+    _items.push_back({"LoRa Radio", SettingType::TOGGLE,
+        [&s]() { return s.loraEnabled ? 1 : 0; },
+        [&s](int v) { s.loraEnabled = (v != 0); },
+        [](int v) { return String(onOff(v != 0)); }});
+    idx++;
     {
         // Region picker - always visible
         SettingItem regionItem;
@@ -627,8 +636,12 @@ void LvSettingsScreen::buildItems() {
     }
     _categories.push_back({"LoRa", radioStart, idx - radioStart,
         [this]() {
+            if (loraSettingsChanged()) {
+                return String("Saved - reboot to apply");
+            }
             int p = detectPreset();
             auto& s = _cfg->settings();
+            if (!s.loraEnabled) return String("Off");
             String label = (p >= 0) ? String(LV_PRESETS[p].name) : String("Custom");
             label += " ";
             label += REGION_LABELS[constrain(s.radioRegion, 0, REGION_COUNT - 1)];
@@ -640,7 +653,10 @@ void LvSettingsScreen::buildItems() {
     int netStart = idx;
     _items.push_back({"WiFi Mode", SettingType::ENUM_CHOICE,
         [&s]() { return (int)s.wifiMode; },
-        [&s](int v) { s.wifiMode = (RatWiFiMode)v; },
+        [&s](int v) {
+            s.wifiMode = (RatWiFiMode)v;
+            if (s.wifiMode != RAT_WIFI_OFF) s.wifiRestoreMode = s.wifiMode;
+        },
         nullptr, 0, 2, 1, {"Off", "Hotspot", "Client"}});
     idx++;
     _items.push_back({"Active WiFi", SettingType::INTEGER,
@@ -725,15 +741,23 @@ void LvSettingsScreen::buildItems() {
         tcpPreset.label = "TCP Relay";
         tcpPreset.type = SettingType::ENUM_CHOICE;
         tcpPreset.getter = [&s]() {
-            for (auto& ep : s.tcpConnections) { if (ep.host == "rns.ratspeak.org") return 1; }
-            if (!s.tcpConnections.empty()) return 2;
+            for (auto& ep : s.tcpConnections) {
+                if (!ep.autoConnect || ep.host.isEmpty()) continue;
+                if (ep.host == "rns.ratspeak.org") return 1;
+                return 2;
+            }
             return 0;
         };
         tcpPreset.setter = [&s](int v) {
-            if (v == 0) { s.tcpConnections.clear(); }
+            if (v == 0) {
+                for (auto& ep : s.tcpConnections) ep.autoConnect = false;
+            }
             else if (v == 1) {
                 s.tcpConnections.clear();
                 TCPEndpoint ep; ep.host = "rns.ratspeak.org"; ep.port = TCP_DEFAULT_PORT; ep.autoConnect = true;
+                s.tcpConnections.push_back(ep);
+            } else if (v == 2 && s.tcpConnections.empty()) {
+                TCPEndpoint ep; ep.port = TCP_DEFAULT_PORT; ep.autoConnect = false;
                 s.tcpConnections.push_back(ep);
             }
         };
@@ -774,7 +798,7 @@ void LvSettingsScreen::buildItems() {
     idx++;
     _categories.push_back({"Interfaces", netStart, idx - netStart,
         [this, &s]() {
-            if (rebootSettingsChanged()) return String("Saved - reboot to apply");
+            if (interfaceSettingsChanged() || tcpSettingsChanged()) return String("Saved - reboot to apply");
             String summary = wifiModeLabel(s.wifiMode);
             if (s.wifiMode == RAT_WIFI_STA) {
                 String ssid = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : selectedWiFiSSID(s);
@@ -1896,11 +1920,18 @@ void LvSettingsScreen::snapshotRebootSettings() {
     _rebootSnap.wifiSTASelected = s.wifiSTASelected;
     _rebootSnap.autoIfaceEnabled = s.autoIfaceEnabled;
     _rebootSnap.sdStorageEnabled = s.sdStorageEnabled;
+    _rebootSnap.loraEnabled = s.loraEnabled;
     _gpsSnapEnabled = s.gpsTimeEnabled;
 }
 
 bool LvSettingsScreen::rebootSettingsChanged() const {
-    return interfaceSettingsChanged() || storageSettingsChanged() || tcpSettingsChanged();
+    return loraSettingsChanged() || interfaceSettingsChanged()
+        || storageSettingsChanged() || tcpSettingsChanged();
+}
+
+bool LvSettingsScreen::loraSettingsChanged() const {
+    if (!_cfg) return false;
+    return _cfg->settings().loraEnabled != _rebootSnap.loraEnabled;
 }
 
 bool LvSettingsScreen::interfaceSettingsChanged() const {
@@ -1927,6 +1958,7 @@ void LvSettingsScreen::snapshotTCPSettings() {
     auto& s = _cfg->settings();
     _tcpSnapHost = s.tcpConnections.empty() ? "" : s.tcpConnections[0].host;
     _tcpSnapPort = s.tcpConnections.empty() ? 0 : s.tcpConnections[0].port;
+    _tcpSnapAuto = !s.tcpConnections.empty() && s.tcpConnections[0].autoConnect;
 }
 
 bool LvSettingsScreen::tcpSettingsChanged() const {
@@ -1934,7 +1966,8 @@ bool LvSettingsScreen::tcpSettingsChanged() const {
     auto& s = _cfg->settings();
     String curHost = s.tcpConnections.empty() ? "" : s.tcpConnections[0].host;
     uint16_t curPort = s.tcpConnections.empty() ? 0 : s.tcpConnections[0].port;
-    return curHost != _tcpSnapHost || curPort != _tcpSnapPort;
+    bool curAuto = !s.tcpConnections.empty() && s.tcpConnections[0].autoConnect;
+    return curHost != _tcpSnapHost || curPort != _tcpSnapPort || curAuto != _tcpSnapAuto;
 }
 
 // --- Frequency digit-cursor editor helpers ---

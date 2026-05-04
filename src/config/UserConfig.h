@@ -32,9 +32,11 @@ struct UserSettings {
     uint8_t loraCR = LORA_DEFAULT_CR;
     int8_t loraTxPower = LORA_DEFAULT_TX_POWER;
     long loraPreamble = LORA_DEFAULT_PREAMBLE;
+    bool loraEnabled = true;
 
     // WiFi
     RatWiFiMode wifiMode = RAT_WIFI_STA;
+    RatWiFiMode wifiRestoreMode = RAT_WIFI_STA;
     String wifiAPSSID;
     String wifiAPPassword = WIFI_AP_PASSWORD;
     std::vector<WiFiNetwork> wifiSTANetworks;

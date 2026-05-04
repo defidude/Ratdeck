@@ -36,7 +36,7 @@ public:
           _destination({RNS::Type::NONE}),
           _loraIface({RNS::Type::NONE}) {}
 
-    bool begin(SX1262* radio, FlashStore* flash);
+    bool begin(SX1262* radio, FlashStore* flash, bool loraEnabled = true);
     void setSDStore(SDStore* sd) { _sd = sd; }
     void loop();
     void persistData();

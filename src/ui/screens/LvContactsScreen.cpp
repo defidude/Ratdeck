@@ -156,14 +156,55 @@ void LvContactsScreen::rebuildList() {
     _lastContactCount = count;
     _avatarBuffers.reserve(count);
 
-    if (count == 0) {
-        if (_emptyState) lv_obj_clear_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(_list, LV_OBJ_FLAG_HIDDEN);
-        return;
+    // Keep list visible even with no contacts so the QR header row is reachable.
+    lv_obj_clear_flag(_list, LV_OBJ_FLAG_HIDDEN);
+    if (_emptyState) {
+        if (count == 0) {
+            lv_obj_clear_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(_emptyState);
+        } else {
+            lv_obj_add_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
-    if (_emptyState) lv_obj_add_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(_list, LV_OBJ_FLAG_HIDDEN);
+    {
+        lv_obj_t* qrRow = lv_obj_create(_list);
+        lv_obj_set_size(qrRow, Theme::CONTENT_W, 28);
+        lv_obj_add_style(qrRow, LvTheme::styleListBtn(), 0);
+        lv_obj_add_style(qrRow, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
+        lv_obj_set_style_bg_color(qrRow, lv_color_hex(Theme::PRIMARY_SUBTLE), 0);
+        lv_obj_set_style_bg_opa(qrRow, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_side(qrRow, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_border_width(qrRow, 1, 0);
+        lv_obj_set_style_border_color(qrRow, lv_color_hex(Theme::BORDER), 0);
+        lv_obj_set_style_pad_all(qrRow, 0, 0);
+        lv_obj_clear_flag(qrRow, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(qrRow, LV_OBJ_FLAG_CLICKABLE);
+        // Sentinel marks this as not-a-contact for handleLongPress().
+        lv_obj_set_user_data(qrRow, (void*)(intptr_t)-1);
+
+        lv_obj_add_event_cb(qrRow, [](lv_event_t* e) {
+            auto* self = (LvContactsScreen*)lv_event_get_user_data(e);
+            if (self->_showQrCb) self->_showQrCb();
+        }, LV_EVENT_CLICKED, this);
+
+        lv_group_add_obj(LvInput::group(), qrRow);
+        lv_obj_add_event_cb(qrRow, [](lv_event_t* e) {
+            lv_obj_scroll_to_view(lv_event_get_target(e), LV_ANIM_ON);
+        }, LV_EVENT_FOCUSED, nullptr);
+
+        lv_obj_t* qrLbl = lv_label_create(qrRow);
+        lv_obj_set_style_text_font(qrLbl, &lv_font_ratdeck_14, 0);
+        lv_obj_set_style_text_color(qrLbl, lv_color_hex(Theme::ACCENT), 0);
+        lv_label_set_text(qrLbl, "Share My QR");
+        lv_obj_align(qrLbl, LV_ALIGN_LEFT_MID, 12, 0);
+
+        lv_obj_t* hintLbl = lv_label_create(qrRow);
+        lv_obj_set_style_text_font(hintLbl, &lv_font_ratdeck_10, 0);
+        lv_obj_set_style_text_color(hintLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
+        lv_label_set_text(hintLbl, "Enter");
+        lv_obj_align(hintLbl, LV_ALIGN_RIGHT_MID, -12, 0);
+    }
 
     unsigned long now = millis();
 

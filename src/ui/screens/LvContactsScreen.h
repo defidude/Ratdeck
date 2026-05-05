@@ -18,6 +18,7 @@ public:
 
     void setAnnounceManager(AnnounceManager* am) { _am = am; }
     void setNodeSelectedCallback(NodeSelectedCallback cb) { _onSelect = cb; }
+    void setShowQrCallback(std::function<void()> cb) { _showQrCb = cb; }
     void setUIManager(class UIManager* ui) { _ui = ui; }
     bool handleLongPress() override;
 
@@ -29,6 +30,7 @@ private:
     AnnounceManager* _am = nullptr;
     class UIManager* _ui = nullptr;
     NodeSelectedCallback _onSelect;
+    std::function<void()> _showQrCb;
     bool _confirmDelete = false;
     bool _focusActive = false;
     int _deleteIdx = -1;

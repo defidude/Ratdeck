@@ -63,14 +63,15 @@ extern const lv_font_t lv_font_ratdeck_14;
 #define LV_USE_ROLLER     1
 #define LV_USE_TABLE      0
 #define LV_USE_TABVIEW    0
-#define LV_USE_IMG        1
+#define LV_USE_IMG        1   // required by LV_USE_CANVAS / LV_USE_QRCODE
 #define LV_USE_LINE       0
 #define LV_USE_ARC        0
 #define LV_USE_SPINNER    0
 #define LV_USE_MSGBOX     0
 #define LV_USE_KEYBOARD   0
 #define LV_USE_CHECKBOX   0
-#define LV_USE_CANVAS     1
+#define LV_USE_CANVAS     1   // required by LV_USE_QRCODE
+#define LV_USE_QRCODE     1
 
 // Layouts
 #define LV_USE_FLEX 1

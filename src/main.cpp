@@ -33,6 +33,7 @@
 #include "ui/screens/LvContactsScreen.h"
 #include "ui/screens/LvSettingsScreen.h"
 #include "ui/screens/LvHelpOverlay.h"
+#include "ui/screens/LvQrOverlay.h"
 // Map screen removed
 #include "ui/screens/LvNameInputScreen.h"
 #include "ui/screens/LvTimezoneScreen.h"
@@ -117,6 +118,7 @@ LvContactsScreen lvContactsScreen;
 LvMessageView lvMessageView;
 LvSettingsScreen lvSettingsScreen;
 LvHelpOverlay lvHelpOverlay;
+LvQrOverlay lvQrOverlay;
 // LvMapScreen removed
 LvNameInputScreen lvNameInputScreen;
 LvTimezoneScreen lvTimezoneScreen;
@@ -1071,8 +1073,22 @@ void setup() {
     });
 #endif
 
+    auto showQr = []() {
+        // Encode `lxma://<destHash>:<publicKey>` so Columba/Sideband
+        // scanners get a full identity (no PENDING_IDENTITY round-trip).
+        String destHex = rns.destinationHashHex();
+        String pubHex;
+        if (auto identity = rns.destination().identity()) {
+            pubHex = String(identity.get_public_key().toHex().c_str());
+        }
+        lvQrOverlay.show(destHex, pubHex);
+    };
+    lvSettingsScreen.setShowQrCallback(showQr);
+    lvContactsScreen.setShowQrCallback(showQr);
+
     // LVGL help overlay
     lvHelpOverlay.create();
+    lvQrOverlay.create();
 
     // Tab bar callbacks — LVGL
     lvTabScreens[LvTabBar::TAB_HOME]     = &lvHomeScreen;
@@ -1249,6 +1265,10 @@ void loop() {
         // Help overlay intercepts all keys when visible
         if (lvHelpOverlay.isVisible()) {
             lvHelpOverlay.handleKey(evt);
+        }
+        // QR overlay also dismisses on any keypress while visible
+        else if (lvQrOverlay.isVisible()) {
+            lvQrOverlay.handleKey(evt);
         }
         else {
             // Screen-local input owns the keyboard. This keeps message and

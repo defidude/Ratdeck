@@ -958,6 +958,18 @@ void LvSettingsScreen::buildItems() {
         idx++;
     }
     {
+        SettingItem showQrItem;
+        showQrItem.label = "Show QR Code";
+        showQrItem.type = SettingType::ACTION;
+        showQrItem.formatter = [](int) { return String("[Enter]"); };
+        showQrItem.action = [this]() {
+            if (_showQrCb) _showQrCb();
+            else if (_ui) _ui->lvStatusBar().showToast("QR not available");
+        };
+        _items.push_back(showQrItem);
+        idx++;
+    }
+    {
         SettingItem initSD;
         initSD.label = "Format SD Card";
         initSD.type = SettingType::ACTION;

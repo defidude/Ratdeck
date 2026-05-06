@@ -93,4 +93,7 @@ The detailed stuff lives in [`docs/`](docs/):
 
 ## License
 
-GPL-3.0
+GNU Affero General Public License v3.0 or later. See [LICENSE](LICENSE).
+
+Vendored third-party code keeps its own license notices, including
+`lib/Crypto` under MIT.

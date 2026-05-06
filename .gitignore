@@ -10,6 +10,4 @@ build/
 __pycache__
 *.pyc
 .DS_Store
-MANUAL.md
-RESOURCES.md
 test_lxmf_compat.py

@@ -1282,11 +1282,14 @@ void loop() {
         }
     }
 
-    // 3. LVGL timer handler — 30 FPS active, 5 FPS dimmed
+    // 3. LVGL timer handler — 30 FPS active, 5 FPS dimmed.
+    // Bypass the throttle on input activity so a keypress/scroll renders this
+    // iteration instead of waiting up to a full frame interval.
     {
         unsigned long now = millis();
         unsigned long lvglInterval = powerMgr.isDimmed() ? 200 : LVGL_INTERVAL_MS;
-        if (powerMgr.isScreenOn() && now - lastLvglTime >= lvglInterval) {
+        bool inputBurst = inputManager.hadActivity();
+        if (powerMgr.isScreenOn() && (inputBurst || now - lastLvglTime >= lvglInterval)) {
             lastLvglTime = now;
             lv_timer_handler();
         }
